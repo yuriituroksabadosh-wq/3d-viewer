@@ -1,9 +1,10 @@
 import { createViewer } from './scene.js';
 import { buildFurniture, makeBoundsBox, dimensionAnchors, validateModel } from './furniture.js';
+import { loadGltfModel } from './gltf-model.js';
 import { createPanel, createInfoBox, createLabels } from './ui.js';
 import { initTelegram } from './telegram.js';
 
-// Готові варіанти кольору фасадів (перший пункт — колір з самого JSON)
+// Готові варіанти кольору фасадів (перший пункт — колір/текстура з самого проєкту)
 const FACADE_COLORS = [
   { name: 'Дуб натуральний', hex: '#c8a66f' },
   { name: 'Горіх', hex: '#6b4a2f' },
@@ -21,16 +22,43 @@ function getModelName() {
   return /^[a-zA-Z0-9-]{1,64}$/.test(raw) ? raw : null;
 }
 
+// Перевірка «магічних» байтів GLB: dev-сервер на відсутній файл віддає index.html з кодом 200
+function isGlb(buffer) {
+  if (buffer.byteLength < 12) return false;
+  const b = new Uint8Array(buffer, 0, 4);
+  return b[0] === 0x67 && b[1] === 0x6c && b[2] === 0x54 && b[3] === 0x46; // "glTF"
+}
+
+/** Спершу шукаємо data/<назва>.glb (модель з БАЗИСу), потім data/<назва>.json. */
 async function loadModel(name) {
+  try {
+    const res = await fetch(`data/${name}.glb`, { cache: 'no-cache' });
+    if (res.ok) {
+      const buffer = await res.arrayBuffer();
+      if (isGlb(buffer)) return loadGltfModel(buffer, name);
+    }
+  } catch {
+    // мережа впала або файлу немає — пробуємо JSON
+  }
+
   const res = await fetch(`data/${name}.json`, { cache: 'no-cache' });
   if (!res.ok) {
     throw new Error(`Не вдалося знайти модель «${name}» (помилка ${res.status}).`);
   }
+  let data;
   try {
-    return await res.json();
+    data = await res.json();
   } catch {
-    throw new Error(`Файл моделі «${name}» не є коректним JSON. Перевірте файл у папці data/.`);
+    throw new Error(`Модель «${name}» не знайдено або файл пошкоджено.`);
   }
+  validateModel(data);
+  const model = buildFurniture(data);
+  model.kind = 'json';
+  model.name = data.name ?? name;
+  model.defaultFacadeColor = data.materials?.facade?.color ?? '#8b6f4e';
+  model.hasFacades = model.parts.some((p) => p.key === 'facade');
+  model.hasRoom = false;
+  return model;
 }
 
 function showError(message) {
@@ -52,23 +80,23 @@ async function main() {
     return showError('Некоректна назва моделі в адресі. Використовуйте лише латинські літери, цифри й дефіс.');
   }
 
-  let data;
+  info.message('Завантаження моделі…');
+  let model;
   try {
-    data = await loadModel(name);
-    validateModel(data);
+    model = await loadModel(name);
   } catch (err) {
-    return showError(err.message);
+    console.error(err);
+    return showError(err.message || 'Не вдалося відкрити модель.');
   }
 
-  const model = buildFurniture(data);
   viewer.scene.add(model.group);
-
+  if (import.meta.env.DEV) window.__viewer = { viewer, model }; // лише для налагодження локально
   const boundsBox = makeBoundsBox(model.bounds);
   viewer.scene.add(boundsBox);
 
   viewer.resize();
   viewer.frame(model.bounds);
-  document.getElementById('title').textContent = data.name ?? name;
+  document.getElementById('title').textContent = model.name;
 
   // Вибір деталі: натискання без руху (щоб не конфліктувати з обертанням камери)
   let downAt = null;
@@ -82,12 +110,15 @@ async function main() {
     if (moved > 6) return;
     const part = model.pick(e.clientX, e.clientY, viewer.camera, canvas);
     model.highlight(part);
-    info.show(part);
+    info.show(part ? model.describe(part) : null);
   });
   info.show(null);
 
+  // Для GLB «Як у проєкті» повертає оригінальні матеріали з текстурами (hex = null)
   const colorOptions = [
-    { name: 'Як у проєкті', hex: data.materials?.facade?.color ?? '#8b6f4e' },
+    model.kind === 'glb'
+      ? { name: 'Як у проєкті', hex: null, swatch: 'linear-gradient(135deg,#f6f4ef 0%,#d8d1c5 100%)' }
+      : { name: 'Як у проєкті', hex: model.defaultFacadeColor },
     ...FACADE_COLORS,
   ];
 
@@ -100,8 +131,9 @@ async function main() {
     onExplode: (t) => model.setExplode(t),
     onFacadeColor: (hex) => model.setMaterialColor('facade', hex),
     onFacadesVisible: (on) => model.setKeyVisible('facade', on),
+    onRoomVisible: model.hasRoom ? (on) => model.setKeyVisible('room', on) : null,
     onReset: () => viewer.resetView(),
-  }, colorOptions);
+  }, colorOptions, { facades: model.hasFacades });
 
   window.addEventListener('resize', () => viewer.resize());
 
@@ -114,7 +146,6 @@ async function main() {
     requestAnimationFrame(loop);
   }
   loop();
-
 }
 
 main().catch((err) => {

@@ -132,6 +132,16 @@ export function buildFurniture(data) {
       for (const p of parts) if (p.key === key) p.mesh.visible = visible;
       if (!visible && selected && selected.key === key) highlight(null);
     },
+    // Дані для вікна деталі
+    describe(part) {
+      const d = part.data;
+      const mat = data.materials?.[part.key]?.name;
+      return {
+        title: d.name ?? d.id,
+        dims: `${d.w} × ${d.h} × ${d.d} мм (ширина × висота × глибина)`,
+        material: mat || (part.key === 'facade' ? 'фасад' : 'корпус'),
+      };
+    },
   };
 }
 

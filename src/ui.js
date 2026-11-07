@@ -12,12 +12,32 @@ function h(tag, props = {}, ...children) {
   return el;
 }
 
+/** Кнопка-перемикач з текстом для двох станів. */
+function toggleButton(onText, offText, initial, onChange) {
+  let on = initial;
+  const btn = h('button', {
+    class: 'btn',
+    type: 'button',
+    'aria-pressed': String(on),
+    onclick: () => {
+      on = !on;
+      btn.setAttribute('aria-pressed', String(on));
+      btn.textContent = on ? onText : offText;
+      onChange(on);
+    },
+  }, on ? onText : offText);
+  return btn;
+}
+
 /**
  * Панель керування (внизу на телефоні, збоку на ПК).
- * handlers: onDims(bool), onExplode(0|1), onFacadeColor(hex), onFacadesVisible(bool), onReset()
- * colors: [{ name, hex }], перший елемент уважається вибраним на старті.
+ * handlers: onDims(bool), onExplode(0|1), onFacadeColor(hex|null), onFacadesVisible(bool),
+ *           onRoomVisible(bool) або null, onReset()
+ * colors: [{ name, hex, swatch? }], перший елемент уважається вибраним на старті.
+ * opts: { facades: bool } — чи є в моделі фасади (якщо ні, блок фасадів не показуємо).
  */
-export function createPanel(container, handlers, colors) {
+export function createPanel(container, handlers, colors, opts = {}) {
+  const showFacades = opts.facades !== false;
   let dimsOn = false;
   let facadesOn = true;
 
@@ -53,7 +73,7 @@ export function createPanel(container, handlers, colors) {
     type: 'button',
     title: c.name,
     'aria-label': c.name,
-    style: `background:${c.hex}`,
+    style: `background:${c.swatch || c.hex}`,
     onclick: () => pickColor(i),
   }));
 
@@ -70,32 +90,52 @@ export function createPanel(container, handlers, colors) {
 
   const resetBtn = h('button', { class: 'btn btn-wide', type: 'button', onclick: () => handlers.onReset() }, 'Скинути вид');
 
-  container.replaceChildren(
+  // Стіни кімнати (лише для моделей з БАЗИСу, де вони є)
+  const viewRow = h('div', { class: 'row' }, dimsBtn);
+  if (showFacades) viewRow.append(facadesBtn);
+  const extraRow = h('div', { class: 'row' });
+  if (handlers.onRoomVisible) {
+    extraRow.append(toggleButton('Стіни: показані', 'Стіни: приховані', true, handlers.onRoomVisible));
+  }
+
+  const blocks = [
     h('div', { class: 'section-title' }, 'Вигляд'),
-    h('div', { class: 'row' }, dimsBtn, facadesBtn),
+    viewRow,
+  ];
+  if (extraRow.childElementCount) blocks.push(extraRow);
+  blocks.push(
     h('div', { class: 'section-title' }, 'Розбирання'),
     h('div', { class: 'row' }, explodeBtn, assembleBtn),
-    h('div', { class: 'section-title' }, 'Колір фасадів'),
-    h('div', { class: 'swatches' }, ...swatches),
-    colorName,
-    h('div', { class: 'row' }, resetBtn),
   );
+  if (showFacades) {
+    blocks.push(
+      h('div', { class: 'section-title' }, 'Колір фасадів'),
+      h('div', { class: 'swatches' }, ...swatches),
+      colorName,
+    );
+  }
+  blocks.push(h('div', { class: 'row' }, resetBtn));
+  container.replaceChildren(...blocks);
 }
 
-/** Вікно з назвою і розмірами вибраної деталі. */
+/** Вікно з назвою і розмірами вибраної деталі. info = { title, dims, material } */
 export function createInfoBox(el) {
   return {
-    show(part) {
-      if (!part) {
+    message(text) {
+      el.replaceChildren(h('div', { class: 'hint' }, text));
+    },
+    show(info) {
+      if (!info) {
         el.replaceChildren(h('div', { class: 'hint' }, 'Натисніть на деталь, щоб побачити її назву й розміри.'));
         return;
       }
-      const d = part.data;
-      el.replaceChildren(
-        h('strong', {}, d.name ?? d.id),
-        h('div', { class: 'hint' }, `Розміри: ${d.w} × ${d.h} × ${d.d} мм (ширина × висота × глибина)`),
-        h('div', { class: 'hint' }, `Матеріал: ${part.key === 'facade' ? 'фасад' : 'корпус'}`),
-      );
+      const rows = [
+        h('strong', {}, info.title),
+        h('div', { class: 'hint' }, `Розміри: ${info.dims}`),
+      ];
+      if (info.material) rows.push(h('div', { class: 'hint' }, `Матеріал: ${info.material}`));
+      if (info.article) rows.push(h('div', { class: 'hint' }, `Артикул: ${info.article}`));
+      el.replaceChildren(...rows);
     },
   };
 }

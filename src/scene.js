@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
 // Масштаб: 1 одиниця three.js = 1 мм (як у JSON-даних).
 
@@ -10,13 +11,23 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 export function createViewer(canvas) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  // Нейтральне тонування: світлі поверхні не «вигорають» у суцільний білий
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = 1;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#e9e5de');
 
+// М'яке «студійне» освітлення-середовище: білі фасади лишаються білими, текстури читаються.
+  // Рахується один раз при старті, на кадри не впливає.
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.6;
+  pmrem.dispose();
+
   // Світло: м'яке загальне + одне напрямлене для обʼєму
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8178, 1.6));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8178, 0.6));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.9);
   sun.position.set(3000, 5000, 4000);
   scene.add(sun);
 
@@ -50,9 +61,13 @@ export function createViewer(canvas) {
     // 2.3 — з запасом, щоб влізав і розібраний виріб
     const dist = maxDim * 2.3 * fit;
 
-    const dir = new THREE.Vector3(0.6, 0.35, 1).normalize();
+    // Напрям погляду: модель може задати свій (кімната з БАЗИСу відкрита спереду)
+    const dir = new THREE.Vector3(...(bounds.viewDir || [0.6, 0.35, 1])).normalize();
     home.target.copy(center);
     home.pos.copy(center).addScaledVector(dir, dist);
+
+    // Підлога сцени — трохи нижче найнижчої точки моделі (у моделей з БАЗИСу є своя підлога)
+    floor.position.y = (bounds.floorY ?? bounds.min.y) - 1;
 
     controls.minDistance = maxDim * 0.3;
     controls.maxDistance = maxDim * 5;

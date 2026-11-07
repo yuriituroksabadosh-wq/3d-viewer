@@ -1,0 +1,158 @@
+// Конвертер моделі з БАЗИСу (COLLADA .dae + папка текстур) у стиснутий GLB для сайту.
+// Використання:  npm run convert -- "шлях\до\Модель.dae" назва-латиницею
+// Результат:     data/<назва>.glb
+//
+// Кроки: assimp (той самий рушій, яким БАЗИС пише .dae) -> GLB,
+// потім glTF-Transform: дедуплікація, інстансинг, стиснення сіток (meshopt) і текстур (webp, до 1024 px).
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { NodeIO } from '@gltf-transform/core';
+import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
+import { dedup, instance, prune, weld, textureCompress, meshopt, getBounds } from '@gltf-transform/functions';
+import { MeshoptEncoder, MeshoptDecoder } from 'meshoptimizer';
+import sharp from 'sharp';
+
+const require = createRequire(import.meta.url);
+
+const [daeArg, slug] = process.argv.slice(2);
+if (!daeArg || !slug || !/^[a-zA-Z0-9-]{1,64}$/.test(slug)) {
+  console.error('Використання: npm run convert -- "шлях\\до\\Модель.dae" назва-латиницею');
+  process.exit(1);
+}
+
+const daePath = path.resolve(daeArg);
+const daeDir = path.dirname(daePath);
+const outPath = path.resolve('data', `${slug}.glb`);
+const mb = (n) => (n / 1024 / 1024).toFixed(1) + ' МБ';
+
+// Збирає всі файли, на які посилається .dae (текстури), з розкодованими шляхами
+function referencedFiles(daeText) {
+  const refs = new Set();
+  for (const m of daeText.matchAll(/<init_from>([^<]+)<\/init_from>/g)) {
+    const raw = m[1].trim();
+    if (!/\.(jpe?g|png|bmp|tga|gif|webp)$/i.test(raw)) continue;
+    refs.add(decodeURIComponent(raw).replace(/\\/g, '/'));
+  }
+  return [...refs];
+}
+
+// Назва ефекту/матеріалу → дифузний колір [r, g, b] (як записав БАЗИС, без масштабування)
+function effectColors(daeText) {
+  const map = new Map();
+  for (const m of daeText.matchAll(/<effect\b[^>]*\bname="([^"]*)"[^>]*>([\s\S]*?)<\/effect>/g)) {
+    const c = /<diffuse>\s*<color[^>]*>([^<]+)<\/color>/.exec(m[2]);
+    if (!c) continue;
+    const rgb = c[1].trim().split(/\s+/).slice(0, 3).map(Number);
+    if (rgb.length === 3 && rgb.every(Number.isFinite)) map.set(m[1], rgb);
+  }
+  return map;
+}
+
+// id вузла → назва з атрибута name (з розкодуванням XML-сутностей)
+function nodeNamesById(daeText) {
+  const unxml = (s) => s.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const map = new Map();
+  for (const m of daeText.matchAll(/<node\b([^>]*)>/g)) {
+    const id = /\bid="([^"]*)"/.exec(m[1]);
+    const name = /\bname="([^"]*)"/.exec(m[1]);
+    if (id && name) map.set(id[1], unxml(name[1]));
+  }
+  return map;
+}
+
+console.log('1/3 Читаю', daePath, mb(fs.statSync(daePath).size));
+const daeBytes = fs.readFileSync(daePath);
+const refs = referencedFiles(daeBytes.toString('utf8'));
+
+// ---- 1. assimp: DAE -> GLB (текстури поки зовнішні) ----
+const ajs = await require('assimpjs')();
+const files = new ajs.FileList();
+files.AddFile(path.basename(daePath), new Uint8Array(daeBytes));
+
+// Тимчасова папка: туди кладемо GLB і копії текстур під тими самими відносними шляхами
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dae2glb-'));
+let missing = 0;
+for (const rel of refs) {
+  const src = path.join(daeDir, rel);
+  if (!fs.existsSync(src)) { console.warn('   немає текстури:', rel); missing++; continue; }
+  const bytes = fs.readFileSync(src);
+  files.AddFile(rel, new Uint8Array(bytes));
+  files.AddFile(path.basename(rel), new Uint8Array(bytes));
+  fs.mkdirSync(path.join(tmp, path.dirname(rel)), { recursive: true });
+  fs.copyFileSync(src, path.join(tmp, rel));
+}
+console.log(`   текстур: ${refs.length}, не знайдено: ${missing}`);
+
+const result = ajs.ConvertFileList(files, 'glb2');
+if (!result.IsSuccess() || result.FileCount() === 0) {
+  console.error('assimp не зміг конвертувати файл:', result.GetErrorCode());
+  process.exit(1);
+}
+const rawGlb = path.join(tmp, 'raw.glb');
+fs.writeFileSync(rawGlb, result.GetFile(0).GetContent());
+console.log('2/3 assimp → GLB', mb(fs.statSync(rawGlb).size));
+
+// ---- 2. glTF-Transform: оптимізація ----
+await MeshoptEncoder.ready;
+await MeshoptDecoder.ready;
+const io = new NodeIO()
+  .registerExtensions(ALL_EXTENSIONS)
+  .registerDependencies({ 'meshopt.encoder': MeshoptEncoder, 'meshopt.decoder': MeshoptDecoder });
+
+const doc = await io.read(rawGlb);
+const root = doc.getRoot();
+
+// assimp називає вузли за id з .dae (латинська «каша»), а людські назви лежать в атрибуті name.
+// Відновлюємо їх: «Фасад», «Стіна», назви фурнітури тощо.
+const names = nodeNamesById(daeBytes.toString('utf8'));
+let renamed = 0;
+for (const node of root.listNodes()) {
+  const id = node.getName();
+  const human = names.get(id) ?? names.get(id.replace(/_\d+$/, ''));
+  if (human !== undefined && human !== id) { node.setName(human); renamed++; }
+}
+console.log(`   відновлено назв вузлів: ${renamed}`);
+
+// БАЗИС пише кольори в .dae у діапазоні 0–255 замість 0–1, і assimp обрізає їх до білого.
+// Беремо колір із .dae, переводимо в лінійний простір (як вимагає glTF) і ставимо матеріалу без текстури.
+const colors = effectColors(daeBytes.toString('utf8'));
+const toLinear = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+let recolored = 0;
+for (const mat of root.listMaterials()) {
+  const name = mat.getName();
+  const rgb = colors.get(name) ?? colors.get(name.split('\r')[0]);
+  const title = name.split('\r')[0].toLowerCase();
+  if (rgb && !mat.getBaseColorTexture()) {
+    const scale = Math.max(...rgb) > 1 ? 255 : 1;
+    mat.setBaseColorFactor([...rgb.map((c) => toLinear(c / scale)), 1]);
+    recolored++;
+  }
+  if (/хром|сталь|нікел|металл|метал/.test(title)) { mat.setMetallicFactor(1); mat.setRoughnessFactor(0.35); }
+  else if (/скло|стекло/.test(title)) { mat.setMetallicFactor(0); mat.setRoughnessFactor(0.1); }
+  else { mat.setMetallicFactor(0); }
+}
+console.log(`   відновлено кольорів матеріалів: ${recolored}`);
+console.log(`   до: вузлів ${root.listNodes().length}, сіток ${root.listMeshes().length}, матеріалів ${root.listMaterials().length}, текстур ${root.listTextures().length}`);
+
+await doc.transform(
+  dedup(),
+  instance({ min: 5 }),
+  weld(),
+  prune({ keepLeaves: true }),
+  textureCompress({ encoder: sharp, targetFormat: 'webp', resize: [1024, 1024] }),
+  meshopt({ encoder: MeshoptEncoder, level: 'medium' }),
+);
+
+const scene = root.getDefaultScene() || root.listScenes()[0];
+const b = getBounds(scene);
+const size = b.max.map((v, i) => v - b.min[i]);
+console.log(`   після: вузлів ${root.listNodes().length}, сіток ${root.listMeshes().length}, текстур ${root.listTextures().length}`);
+console.log('   габарити (одиниці файлу):', size.map((v) => v.toFixed(3)).join(' × '));
+
+fs.mkdirSync(path.dirname(outPath), { recursive: true });
+await io.write(outPath, doc);
+fs.rmSync(tmp, { recursive: true, force: true });
+console.log('3/3 Готово:', outPath, mb(fs.statSync(outPath).size));
