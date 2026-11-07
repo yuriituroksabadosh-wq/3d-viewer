@@ -8,7 +8,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SITE = 'https://yuriituroksabadosh-wq.github.io/3d-viewer/';
 const [slug, chatArg] = process.argv.slice(2);
 if (!slug || !/^[a-zA-Z0-9-]{1,64}$/.test(slug)) {
   console.error('Використання: npm run send -- назва-моделі [chat_id]');
@@ -43,18 +42,20 @@ if (fs.existsSync(glbPath)) {
   if (m3?.name) title = [m3.name, m3.prefix].filter(Boolean).join(' · ');
 }
 
-// ---- Посилання (з КП, якщо є ключ) ----
-let url = `${SITE}?model=${slug}`;
+// ---- Посилання: пряме посилання на міні-застосунок (з ключем КП, якщо він є) ----
+// Кнопка — звичайне посилання (url), а не web_app: такі кнопки Telegram зберігає при пересиланні,
+// тож це повідомлення можна просто переслати замовнику.
+const TG_APP = 'https://t.me/m3_prodject_bot/view';
+let url = `${TG_APP}?startapp=${slug}`;
 let withKp = false;
 const keyFile = path.join('keys', `${slug}.txt`);
 if (fs.existsSync(keyFile) && fs.existsSync(path.join('data', `${slug}.kp.bin`))) {
   const m = /kp=([A-Za-z0-9_-]{43})/.exec(fs.readFileSync(keyFile, 'utf8'));
-  // У Telegram ключ — у параметрі ?kp= (частину після # Telegram перезаписує своїми даними)
-  if (m) { url += `&kp=${m[1]}`; withKp = true; }
+  if (m) { url += `__${m[1]}`; withKp = true; }
 }
 
-const caption = `${title}\n3D-модель${withKp ? ' і комерційна пропозиція' : ''} від М3 Меблі.\n\nНатисніть кнопку, щоб відкрити.`;
-const reply_markup = JSON.stringify({ inline_keyboard: [[{ text: 'Відкрити 3D-модель', web_app: { url } }]] });
+const caption = `${title}\n3D-модель${withKp ? ' і комерційна пропозиція' : ''} від М3 Меблі.\n\nНатисніть «Відкрити 3D-модель».`;
+const reply_markup = JSON.stringify({ inline_keyboard: [[{ text: 'Відкрити 3D-модель', url }]] });
 
 // ---- Відправка: фото з кнопкою, а якщо прев'ю немає — просто повідомлення ----
 const photoPath = path.join('data', `${slug}.jpg`);
