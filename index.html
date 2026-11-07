@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Перегляд меблів</title>
+    <!-- Telegram Web App SDK: у звичайному браузері просто не спрацьовує -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="header"><span id="title">Завантаження…</span></header>
+      <div id="body">
+        <main id="stage">
+          <canvas id="canvas"></canvas>
+          <div id="labels" hidden></div>
+          <div id="error" hidden></div>
+        </main>
+        <aside id="sidebar">
+          <div id="info"></div>
+          <div id="panel"></div>
+        </aside>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

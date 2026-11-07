@@ -1,0 +1,16 @@
+{
+  "name": "Шафа-купе 2200×1800×600",
+  "unit": "mm",
+  "parts": [
+    { "id": "side-left",  "name": "Бічна ліва",  "w": 18,   "h": 2200, "d": 600, "x": 0,    "y": 0,    "z": 0,   "material": "corpus" },
+    { "id": "side-right", "name": "Бічна права", "w": 18,   "h": 2200, "d": 600, "x": 1782, "y": 0,    "z": 0,   "material": "corpus" },
+    { "id": "top",        "name": "Верх",        "w": 1764, "h": 18,   "d": 600, "x": 18,   "y": 2182, "z": 0,   "material": "corpus" },
+    { "id": "bottom",     "name": "Низ",         "w": 1764, "h": 18,   "d": 600, "x": 18,   "y": 0,    "z": 0,   "material": "corpus" },
+    { "id": "door-1",     "name": "Двері 1",     "w": 900,  "h": 2200, "d": 18,  "x": 0,    "y": 0,    "z": 600, "material": "facade" },
+    { "id": "door-2",     "name": "Двері 2",     "w": 900,  "h": 2200, "d": 18,  "x": 900,  "y": 0,    "z": 600, "material": "facade" }
+  ],
+  "materials": {
+    "corpus": { "name": "Корпус", "color": "#e8dcc8" },
+    "facade": { "name": "Фасад",  "color": "#8b6f4e" }
+  }
+}
