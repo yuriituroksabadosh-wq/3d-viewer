@@ -7,9 +7,11 @@
     "dev": "vite --host",
     "build": "vite build",
     "preview": "vite preview --host",
-    "convert": "node tools/convert-dae.mjs"
+    "convert": "node tools/convert-dae.mjs",
+    "kp": "node tools/encrypt-kp.mjs"
   },
   "dependencies": {
+    "pdfjs-dist": "6.4.299",
     "three": "0.169.0"
   },
   "devDependencies": {

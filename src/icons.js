@@ -65,6 +65,10 @@ export const ICONS = {
     <circle cx="12" cy="8.5" r="3.5" ${ACC}/>
     <circle cx="12" cy="8.5" r="3.5"/>
     <path d="M5 20c.8-3.8 3.6-5.5 7-5.5s6.2 1.7 7 5.5"/>`),
+  kp: svg(`
+    <path d="M6 3.5h8l4.5 4.5v12a.5.5 0 0 1-.5.5H6a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5z" ${ACC}/>
+    <path d="M6 3.5h8l4.5 4.5v12a.5.5 0 0 1-.5.5H6a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5z"/>
+    <path d="M14 3.5V8h4.5M8.5 12h7M8.5 15h7M8.5 18h4"/>`),
   explode: svg(`
     <rect x="9" y="9" width="6" height="6" rx="1" ${ACC}/>
     <rect x="9" y="9" width="6" height="6" rx="1"/>

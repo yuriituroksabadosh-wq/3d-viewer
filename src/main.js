@@ -6,6 +6,7 @@ import { createViewCube } from './viewcube.js';
 import { initTelegram } from './telegram.js';
 import { ICONS } from './icons.js';
 import { createMenu, showPartsList, createRuler, showHelp } from './extras.js';
+import { prepareKp } from './kp.js';
 
 // Готові варіанти кольору фасадів (перший пункт — колір/текстура з самого проєкту)
 const FACADE_COLORS = [
@@ -297,6 +298,9 @@ async function main() {
   let roomShown = true;
   let roomBeforeExplode = false; // кімната відкрита лише спереду — гойдаємо, а не крутимо по колу
 
+  // КП: зашифрований файл data/<назва>.kp.bin + ключ у посиланні (#kp=…)
+  const openKp = await prepareKp(name);
+
   const panel = createPanel($('panel'), {
     onViewMode: isGlbModel ? (m) => model.setViewMode(m) : null,
     onDims(on) {
@@ -306,7 +310,7 @@ async function main() {
     },
     onFacadesVisible: (on) => model.setKeyVisible('facade', on),
     onRoomVisible: model.hasRoom ? (on) => { roomShown = on; model.setKeyVisible('room', on); } : null,
-    onClientView: isGlbModel && model.technicalCount ? (on) => { model.setClientView(on); refreshInfo(); } : null,
+    onKp: openKp ? () => openKp(model.name) : null,
     onSpin: (on) => viewer.setSpin(on, roomSpin),
     onExplode: (t) => {
       model.setExplode(t);
@@ -368,6 +372,7 @@ async function main() {
       },
     },
     isGlbModel && { label: 'Показати все', icon: '👁', onClick: () => showAll() },
+    openKp && { label: 'Комерційна пропозиція', icon: '📄', onClick: () => openKp(model.name) },
     { label: 'Інструкція', icon: '?', onClick: () => showHelp() },
   ]);
   const isVisiblePart = (part) => part.meshes ? part.meshes.some((r) => r.mesh.visible) : true;

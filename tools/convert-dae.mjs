@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
 import { NodeIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import { dedup, instance, prune, weld, textureCompress, meshopt, getBounds } from '@gltf-transform/functions';
@@ -151,7 +152,7 @@ await doc.transform(
 
 const scene = root.getDefaultScene() || root.listScenes()[0];
 
-// Параметри виробу з БАЗИСу (скрипт «Параметри для 3D-перегляду» пише m3-viewer.json поруч із моделлю)
+// Параметри виробу з БАЗИСу (скрипт «Експорт для 3D-перегляду» пише m3-viewer.json поруч із моделлю)
 const infoPath = path.join(daeDir, "m3-viewer.json");
 if (fs.existsSync(infoPath)) {
   const meta = JSON.parse(fs.readFileSync(infoPath, "utf8").replace(/^﻿/, ""));
@@ -168,7 +169,7 @@ if (fs.existsSync(infoPath)) {
   console.log(`   кріплень з БАЗИСу: ${m3.fasteners.length}`);
   console.log(`   параметри виробу: «${m3.name}» ${m3.prefix}${withOrder ? ", замовлення: " + m3.order : " (замовлення не додано: --with-order)"}`);
 } else {
-  console.log("   m3-viewer.json не знайдено — назва виробу буде з адреси (запустіть у БАЗИСі «Параметри для 3D-перегляду»)");
+  console.log("   m3-viewer.json не знайдено — назва виробу буде з адреси (запустіть у БАЗИСі «Експорт для 3D-перегляду»)");
 }
 const b = getBounds(scene);
 const size = b.max.map((v, i) => v - b.min[i]);
@@ -179,3 +180,16 @@ fs.mkdirSync(path.dirname(outPath), { recursive: true });
 await io.write(outPath, doc);
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log('3/3 Готово:', outPath, mb(fs.statSync(outPath).size));
+
+// КП з папки замовлення: PDF, назва якого починається на «КП» (наприклад, КП_48.pdf), шифруємо автоматично
+const kpFiles = fs.readdirSync(daeDir).filter((f) => /^кп.*[.]pdf$/i.test(f));
+if (kpFiles.length) {
+  // Якщо КП кілька — беремо найновіший
+  const kp = kpFiles
+    .map((f) => ({ f, t: fs.statSync(path.join(daeDir, f)).mtimeMs }))
+    .sort((x, y) => y.t - x.t)[0].f;
+  console.log('КП знайдено:', kp);
+  execFileSync(process.execPath, [path.resolve('tools', 'encrypt-kp.mjs'), path.join(daeDir, kp), slug], { stdio: 'inherit' });
+} else {
+  console.log('КП у папці не знайдено (файл має починатися на «КП» і бути .pdf) — модель буде без КП');
+}

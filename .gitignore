@@ -1,3 +1,4 @@
 node_modules
 dist
 bot.config.json
+keys/

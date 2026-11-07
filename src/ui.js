@@ -76,7 +76,8 @@ export function createPanel(container, handlers, colors, opts = {}) {
   const facadesBtn = showFacades && tile(ICONS.facades, "Фасади", true, handlers.onFacadesVisible);
   const roomBtn = handlers.onRoomVisible && tile(ICONS.walls, "Стіни", true, handlers.onRoomVisible);
   const spinBtn = tile(ICONS.spin, "Обертання", false, handlers.onSpin);
-  const clientBtn = handlers.onClientView && tile(ICONS.client, "Для клієнта", true, handlers.onClientView);
+  // КП: дія, а не перемикач — відкриває комерційну пропозицію (лише якщо вона є і посилання з ключем)
+  const clientBtn = handlers.onKp && tile(ICONS.kp, "КП", false, () => { clientBtn.set(false); handlers.onKp(); });
 
   const openBtn = handlers.onOpen && toggleButton('Закрити', opts.openLabel || 'Відкрити двері й шухляди', false, (on) => handlers.onOpen(on ? 1 : 0));
 
