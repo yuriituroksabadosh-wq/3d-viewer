@@ -161,9 +161,9 @@ if (fs.existsSync(infoPath)) {
   if (infoText.includes("�")) infoText = new TextDecoder("windows-1251").decode(rawInfo);
   const meta = JSON.parse(infoText);
   const m3 = {
-    name: meta.name || "",
-    prefix: meta.prefix || "",
-    article: meta.article || "",
+    name: String(meta.name || "").trim(),
+    prefix: String(meta.prefix || "").trim(),
+    article: String(meta.article || "").trim(),
     order: withOrder ? meta.order || "" : "",
     // Кріплення без геометрії в .dae (шканти, конфірмати…): точка й осі з БАЗИСу
     fasteners: Array.isArray(meta.fasteners) ? meta.fasteners : [],
