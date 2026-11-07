@@ -278,7 +278,8 @@ function findOpeners(parts) {
           maxAngle: THREE.MathUtils.degToRad(95),
         };
       }
-      openers.push({ ...op, facade: f, parts: [f, ...near, ...hs] });
+      // Петлі лишаються на ответних планках корпусу (плече петлі закріплене), рухаються лише фасад і ручка
+      openers.push({ ...op, facade: f, parts: [f, ...hs] });
       near.concat(hs).forEach((p) => used.add(p));
       continue;
     }

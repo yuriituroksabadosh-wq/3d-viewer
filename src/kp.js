@@ -3,10 +3,14 @@
 
 import { openSheet } from './extras.js';
 
-/** Ключ з адреси: …#kp=<ключ> */
+/** Ключ з адреси: …#kp=<ключ> або …?kp=<ключ> */
 export function kpKey() {
+  // 1) після # (звичайне посилання); 2) параметр ?kp= — для кнопки в Telegram-боті,
+  //    бо Telegram дописує свої дані після # і може затерти ключ
   const m = /(?:^|[#&])kp=([A-Za-z0-9_-]{43})/.exec(window.location.hash);
-  return m ? m[1] : null;
+  if (m) return m[1];
+  const q = new URLSearchParams(window.location.search).get("kp");
+  return q && /^[A-Za-z0-9_-]{43}$/.test(q) ? q : null;
 }
 
 const fromB64url = (s) => {
