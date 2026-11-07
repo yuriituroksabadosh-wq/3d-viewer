@@ -4,6 +4,7 @@ import { loadGltfModel } from './gltf-model.js';
 import { createPanel, createInfoBox, createLabels, toast } from './ui.js';
 import { createViewCube } from './viewcube.js';
 import { initTelegram } from './telegram.js';
+import { ICONS } from './icons.js';
 import { createMenu, showPartsList, createRuler, showHelp } from './extras.js';
 
 // Готові варіанти кольору фасадів (перший пункт — колір/текстура з самого проєкту)
@@ -18,35 +19,6 @@ const FACADE_COLORS = [
 
 const DEFAULT_MODEL = 'sample-cabinet';
 const $ = (id) => document.getElementById(id);
-
-// Іконки панелі інструментів: двоколірні, 32×32; акцент — фірмове золото (змінна --icon-accent)
-const ICONS = {
-  scan: `<svg viewBox="0 0 32 32" aria-hidden="true">
-    <path d="M4 10V6.5A2.5 2.5 0 0 1 6.5 4H10M22 4h3.5A2.5 2.5 0 0 1 28 6.5V10M28 22v3.5a2.5 2.5 0 0 1-2.5 2.5H22M10 28H6.5A2.5 2.5 0 0 1 4 25.5V22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
-    <g fill="var(--icon-accent)"><rect x="9" y="9" width="6" height="6" rx="1.2"/><rect x="17" y="9" width="6" height="6" rx="1.2"/><rect x="9" y="17" width="6" height="6" rx="1.2"/><rect x="17.5" y="17.5" width="2.6" height="2.6" rx=".5"/><rect x="20.4" y="20.4" width="2.6" height="2.6" rx=".5"/></g>
-    <path d="M6 16h20" stroke="#d9480f" stroke-width="1.6" stroke-linecap="round"/></svg>`,
-  block: `<svg viewBox="0 0 32 32" aria-hidden="true">
-    <path d="M16 15 27 9.5v13L16 28z" fill="var(--icon-accent)" fill-opacity=".75"/>
-    <path d="M16 15 5 9.5v13L16 28z" fill="var(--icon-accent)" fill-opacity=".3"/>
-    <path d="M16 4 27 9.5v13L16 28 5 22.5v-13z M5 9.5 16 15l11-5.5M16 15v13" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`,
-  open: `<svg viewBox="0 0 32 32" aria-hidden="true">
-    <rect x="5" y="4" width="14" height="24" rx="1.5" fill="var(--icon-accent)" fill-opacity=".18" stroke="currentColor" stroke-width="2"/>
-    <path d="M8 12h8M8 19h8" stroke="currentColor" stroke-width="1.6" opacity=".45" stroke-linecap="round"/>
-    <path d="M19 4l8.5 3.2v18.6L19 28z" fill="var(--icon-accent)" fill-opacity=".7" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-    <path d="M23.5 14.5v3.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>`,
-  close: `<svg viewBox="0 0 32 32" aria-hidden="true">
-    <rect x="5" y="4" width="22" height="24" rx="1.5" fill="var(--icon-accent)" fill-opacity=".55" stroke="currentColor" stroke-width="2"/>
-    <path d="M16 4v24" stroke="currentColor" stroke-width="2"/>
-    <path d="M13 14v4M19 14v4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>`,
-  hide: `<svg viewBox="0 0 32 32" aria-hidden="true">
-    <path d="M3.5 16S8.5 7 16 7s12.5 9 12.5 9-5 9-12.5 9S3.5 16 3.5 16z" fill="var(--icon-accent)" fill-opacity=".25" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-    <circle cx="16" cy="16" r="4.5" fill="none" stroke="currentColor" stroke-width="2"/>
-    <path d="M6 26 26 6" stroke="#d9480f" stroke-width="2.6" stroke-linecap="round"/></svg>`,
-  show: `<svg viewBox="0 0 32 32" aria-hidden="true">
-    <path d="M3.5 16S8.5 7 16 7s12.5 9 12.5 9-5 9-12.5 9S3.5 16 3.5 16z" fill="var(--icon-accent)" fill-opacity=".25" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-    <circle cx="16" cy="16" r="4.5" fill="var(--icon-accent)" stroke="currentColor" stroke-width="2"/>
-    <circle cx="17.5" cy="14.5" r="1.2" fill="#fff"/></svg>`,
-};
 
 /** Назва моделі з адреси ?model=... Лише латиниця, цифри й дефіс (щоб не було ../). */
 function getModelName() {

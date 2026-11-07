@@ -83,6 +83,12 @@ const TECHNICAL = /шкант|конфірмат|комформат|конфир
 const isFacadeName = (n) => n.startsWith('фасад') || n === 'двері';
 const isRoomName = (n) => n === 'стіна' || n === 'заміри';
 
+/** «ДСП лам. Kronospan 0101 PE Білий фасадний 18мм … 2800х2070х18 мм» → «ДСП лам. Kronospan 0101 PE Білий фасадний» */
+function shortMaterial(name) {
+  const cut = name.search(/ [0-9]+([.,][0-9]+)? ?мм| [0-9]{3,4} ?[хx×] ?[0-9]| [+] | (вологост|ВОЛОГОСТ)/);
+  return (cut > 0 ? name.slice(0, cut) : name).trim();
+}
+
 /** Мініатюра для кнопки вибору матеріалу: шматок текстури (dataURL) або CSS-колір. */
 function swatchOf(m) {
   try {
@@ -414,12 +420,24 @@ export async function loadGltfModel(buffer, title) {
     const n = matName(rec.original);
     if (!rec.swappable || /крайка|хдф/i.test(n) || seen.has(n) || rec.part.key === 'room') continue;
     seen.add(n);
-    options.push({ name: n, material: rec.original, swatch: swatchOf(rec.original) });
+    options.push({ name: n, short: shortMaterial(n), material: rec.original, swatch: swatchOf(rec.original) });
   }
   const SLOT_LABELS = { facade: 'Фасади', corpus: 'Корпус', top: 'Стільниця' };
+  // Для кожної групи — який матеріал стоїть у проєкті (найчастіший серед її плит, без крайок)
   const slots = Object.keys(SLOT_LABELS)
     .filter((id) => parts.some((p) => p.slot === id))
-    .map((id) => ({ id, label: SLOT_LABELS[id] }));
+    .map((id) => {
+      const counts = new Map();
+      for (const p of parts) {
+        if (p.slot !== id) continue;
+        for (const rec of p.meshes) {
+          const i = options.findIndex((o) => o.name === matName(rec.original));
+          if (i >= 0) counts.set(i, (counts.get(i) || 0) + 1);
+        }
+      }
+      const current = [...counts.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? 0;
+      return { id, label: SLOT_LABELS[id], current };
+    });
 
   function setSlotMaterial(slot, index) {
     if (index === null || index === undefined) slotOverride.delete(slot);
@@ -545,7 +563,7 @@ export async function loadGltfModel(buffer, title) {
     openers: { doors: openers.filter((o) => o.kind === 'door').length, drawers: openers.filter((o) => o.kind === 'drawer').length },
     setMaterialColor,
     materialSlots: slots,
-    materialOptions: options.map((o) => ({ name: o.name, swatch: o.swatch })),
+    materialOptions: options.map((o) => ({ name: o.name, short: o.short, swatch: o.swatch })),
     setSlotMaterial,
     setKeyVisible,
     setClientView,

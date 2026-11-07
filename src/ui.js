@@ -1,4 +1,5 @@
 // Елементи інтерфейсу: панель керування, вікно деталі, підписи розмірів, повідомлення.
+import { ICONS } from './icons.js';
 
 /** Маленький хелпер для створення DOM: h('button', { class: 'btn', onclick: fn }, 'Текст') */
 function h(tag, props = {}, ...children) {
@@ -26,6 +27,24 @@ function toggleButton(onText, offText, initial, onChange) {
   return btn;
 }
 
+/**
+ * Плитка з іконкою й підписом. Перемикач: натискання міняє стан і викликає onChange(on).
+ * radio = true — для взаємовиключних варіантів: повторне натискання не вимикає.
+ */
+function tile(icon, label, initial, onChange, radio = false) {
+  let on = initial;
+  const b = h('button', { class: 'tile', type: 'button', title: label, 'aria-label': label });
+  b.innerHTML = icon + `<span class="tile-cap">${label}</span>`;
+  const paint = () => b.setAttribute('aria-pressed', String(on));
+  b.addEventListener('click', () => {
+    if (radio) { if (!on) onChange(true); return; }
+    on = !on; paint(); onChange(on);
+  });
+  b.set = (v) => { on = v; paint(); };
+  paint();
+  return b;
+}
+
 const button = (text, onclick, cls = 'btn') => h('button', { class: cls, type: 'button', onclick }, text);
 const section = (title) => h('div', { class: 'section-title' }, title);
 const row = (...items) => h('div', { class: 'row' }, ...items.filter(Boolean));
@@ -41,11 +60,23 @@ const row = (...items) => h('div', { class: 'row' }, ...items.filter(Boolean));
 export function createPanel(container, handlers, colors, opts = {}) {
   const showFacades = opts.facades !== false;
 
-  const dimsBtn = toggleButton('Розміри: показані', 'Показати розміри', false, handlers.onDims);
-  const facadesBtn = showFacades && toggleButton('Фасади: показані', 'Фасади: приховані', true, handlers.onFacadesVisible);
-  const roomBtn = handlers.onRoomVisible && toggleButton('Стіни: показані', 'Стіни: приховані', true, handlers.onRoomVisible);
-  const clientBtn = handlers.onClientView && toggleButton('Як бачить клієнт: увімк.', 'Як бачить клієнт: вимк.', true, handlers.onClientView);
-  const spinBtn = toggleButton('Обертання: увімк.', 'Обертання', false, handlers.onSpin);
+  // ---- «Вигляд»: плитки з іконками (як панель над сценою) ----
+  // Режими: лише два — «Текстури з лініями» і «Рентген»; решта — перемикачі
+  const modeTiles = [];
+  if (handlers.onViewMode) {
+    for (const [id, label, icon] of [["real-lines", "Текстури", ICONS.texture], ["xray", "Рентген", ICONS.xray]]) {
+      const t = tile(icon, label, id === (opts.viewMode || "real-lines"), () => {
+        modeTiles.forEach((x) => x.set(x === t));
+        handlers.onViewMode(id);
+      }, true);
+      modeTiles.push(t);
+    }
+  }
+  const dimsBtn = tile(ICONS.dims, "Розміри", false, handlers.onDims);
+  const facadesBtn = showFacades && tile(ICONS.facades, "Фасади", true, handlers.onFacadesVisible);
+  const roomBtn = handlers.onRoomVisible && tile(ICONS.walls, "Стіни", true, handlers.onRoomVisible);
+  const spinBtn = tile(ICONS.spin, "Обертання", false, handlers.onSpin);
+  const clientBtn = handlers.onClientView && tile(ICONS.client, "Для клієнта", true, handlers.onClientView);
 
   const openBtn = handlers.onOpen && toggleButton('Закрити', opts.openLabel || 'Відкрити двері й шухляди', false, (on) => handlers.onOpen(on ? 1 : 0));
 
@@ -64,53 +95,30 @@ export function createPanel(container, handlers, colors, opts = {}) {
   }
   mark(0);
 
-  // Режими відображення (як у БАЗИСі): один вибраний
-  let modeRow = null;
-  if (handlers.onViewMode) {
-    const modes = [
-      ["real-lines", "Текстури з лініями"],
-      ["real", "Текстури"],
-      ["lines", "Контури"],
-      ["xray", "Рентген"],
-    ];
-    const btns = modes.map(([id, label]) => {
-      const b = button(label, () => {
-        btns.forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-        handlers.onViewMode(id);
-      }, "btn btn-small");
-      b.setAttribute("aria-pressed", String(id === (opts.viewMode || "real-lines")));
-      return b;
-    });
-    modeRow = h("div", { class: "row modes" }, ...btns);
-  }
-
   const blocks = [
     section('Вигляд'),
-    modeRow,
-    row(dimsBtn, facadesBtn),
-    row(roomBtn, spinBtn),
-    clientBtn && row(clientBtn),
+    h('div', { class: 'tiles' }, ...[...modeTiles, dimsBtn, facadesBtn, roomBtn, spinBtn, clientBtn].filter(Boolean)),
     section('Анімація'),
     openBtn && row(openBtn),
-    row(button('Розібрати', () => handlers.onExplode(1)), button('Зібрати', () => handlers.onExplode(0))),
+    h('div', { class: 'tiles' }, tile(ICONS.explode, 'Розібрати', false, (on) => handlers.onExplode(on ? 1 : 0))),
   ];
   if (opts.materialSlots && opts.materialSlots.length && opts.materialOptions && opts.materialOptions.length) {
     // Матеріали з самої моделі: для кожної групи (фасади, корпус, стільниця) свій вибір
     blocks.push(section('Матеріали'));
     for (const slot of opts.materialSlots) {
-      const label = h('div', { class: 'hint slot-label' }, `${slot.label}: як у проєкті`);
-      const choices = [{ name: 'Як у проєкті', swatch: 'linear-gradient(135deg,#f6f4ef 0%,#d8d1c5 100%)', index: null },
-        ...opts.materialOptions.map((o, i) => ({ ...o, index: i }))];
-      const btns = choices.map((c) => h('button', {
-        class: 'swatch', type: 'button', title: c.name, 'aria-label': `${slot.label}: ${c.name}`,
-        style: `background:${c.swatch}`,
+      // Лише матеріали з проєкту; на старті вибрано той, що стоїть у моделі
+      const options = opts.materialOptions;
+      const label = h('div', { class: 'hint slot-label' }, `${slot.label}: ${options[slot.current].short || options[slot.current].name}`);
+      const btns = options.map((o, i) => h('button', {
+        class: 'swatch', type: 'button', title: o.name, 'aria-label': `${slot.label}: ${o.name}`,
+        style: `background:${o.swatch}`,
         onclick: () => {
-          btns.forEach((b) => b.classList.toggle('active', b === btns[choices.indexOf(c)]));
-          label.textContent = `${slot.label}: ${c.name.toLowerCase() === 'як у проєкті' ? 'як у проєкті' : c.name}`;
-          handlers.onSlotMaterial(slot.id, c.index);
+          btns.forEach((b, j) => b.classList.toggle('active', j === i));
+          label.textContent = `${slot.label}: ${o.short || o.name}`;
+          handlers.onSlotMaterial(slot.id, i === slot.current ? null : i); // свій матеріал — повертаємо оригінал з крайками
         },
       }));
-      btns[0].classList.add('active');
+      btns[slot.current].classList.add('active');
       blocks.push(label, h('div', { class: 'swatches' }, ...btns));
     }
   } else if (showFacades) {

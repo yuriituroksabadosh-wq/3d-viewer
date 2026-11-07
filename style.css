@@ -409,3 +409,21 @@ body {
 .ruler-label[hidden] { display: none; }
 #rulers { position: absolute; inset: 0; pointer-events: none; }
 .slot-label { margin-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Плитки розділу «Вигляд»: однаковий розмір, іконка + підпис, золото, коли увімкнено */
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 8px 0; }
+.tile {
+  --icon-accent: #c9a46a;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  min-width: 0; height: 64px; padding: 6px 2px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); color: #2f3236;
+  font: inherit; cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.tile:hover { background: rgba(201, 164, 106, 0.12); border-color: rgba(201, 164, 106, 0.5); }
+.tile:active { transform: scale(0.96); }
+.tile[aria-pressed="true"] { --icon-accent: #ffffff; background: linear-gradient(160deg, #d2b07a, #a8834c); border-color: #a8834c; color: #fff; }
+.tile svg { width: 24px; height: 24px; flex: none; }
+.tile-cap { font-size: 11.5px; font-weight: 600; line-height: 1.1; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool svg { width: 24px !important; height: 24px !important; }
