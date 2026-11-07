@@ -123,6 +123,7 @@ export function createViewer(canvas) {
 
   /** Викликається щокадру з main.js (dt у секундах). */
   function tick(dt) {
+    resize();
     if (fly) {
       fly.t = Math.min(1, fly.t + dt / fly.duration);
       const k = fly.t * fly.t * (3 - 2 * fly.t);
@@ -175,16 +176,23 @@ export function createViewer(canvas) {
   }
 
   /** Підганяє розмір рендера під розмір канвасу (телефон, поворот, зміна вікна). */
+  let lastW = 0;
+  let lastH = 0;
   function resize() {
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
-    if (!w || !h) return;
+    if (!w || !h || (w === lastW && h === lastH)) return;
+    lastW = w;
+    lastH = h;
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
   }
 
   resize();
+  // Розмір полотна може змінитись без події resize вікна (Telegram розгортає застосунок, панель змінює висоту) —
+  // інакше пропорції камери лишаються старими і модель виглядає розтягнутою
+  if (window.ResizeObserver) new ResizeObserver(() => resize()).observe(canvas);
 
   return {
     scene,

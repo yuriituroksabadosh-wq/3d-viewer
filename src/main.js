@@ -92,7 +92,11 @@ function showError(message) {
   box.hidden = false;
 }
 
+// Режим знімка для прев'ю в боті: ?shot=1 — лише сцена без інтерфейсу, кадр у window.__shot
+const SHOT = new URLSearchParams(window.location.search).get('shot') === '1';
+
 async function main() {
+  if (SHOT) document.body.classList.add('shot');
   const tg = initTelegram();
   const inTelegram = !!(tg && tg.platform && tg.platform !== 'unknown');
   const canvas = $('canvas');
@@ -136,7 +140,7 @@ async function main() {
   document.title = `${model.name} — М3 Меблі`;
   $('loader-fill').style.width = '100%';
   $('loader').classList.add('done');
-  viewer.intro();
+  if (!SHOT) viewer.intro();
 
   // ---- Вибір деталі або цілого блоку ----
   let blockMode = false;
@@ -379,9 +383,12 @@ async function main() {
   const isVisiblePart = (part) => part.meshes ? part.meshes.some((r) => r.mesh.visible) : true;
 
   window.addEventListener('resize', () => viewer.resize());
+  // Telegram змінює висоту вікна застосунку (розгортання, клавіатура) своєю подією
+  if (inTelegram && tg.onEvent) tg.onEvent('viewportChanged', () => viewer.resize());
 
   // Один рендер-цикл на всю сторінку
   let last = performance.now();
+  let shotFrames = 0;
   function loop(now) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
@@ -392,6 +399,11 @@ async function main() {
     cube.render();
     labels.update(viewer.camera, canvas.clientWidth, canvas.clientHeight);
     ruler.update(canvas.clientWidth, canvas.clientHeight);
+    // Знімок: кілька кадрів на підвантаження текстур, далі зберігаємо JPEG одразу після рендеру
+    if (SHOT && !window.__shot && ++shotFrames > 20) {
+      viewer.renderer.render(viewer.scene, viewer.camera);
+      window.__shot = canvas.toDataURL('image/jpeg', 0.9);
+    }
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);

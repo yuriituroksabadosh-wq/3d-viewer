@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview --host",
     "convert": "node tools/convert-dae.mjs",
-    "kp": "node tools/encrypt-kp.mjs"
+    "kp": "node tools/encrypt-kp.mjs",
+    "send": "node tools/send-tg.mjs",
+    "shot": "node tools/preview.mjs"
   },
   "dependencies": {
     "pdfjs-dist": "6.4.299",
@@ -20,6 +22,7 @@
     "@gltf-transform/functions": "4.5.1",
     "assimpjs": "0.0.10",
     "meshoptimizer": "1.3.0",
+    "puppeteer-core": "25.16.0",
     "sharp": "0.35.5",
     "vite": "5.4.11"
   }
