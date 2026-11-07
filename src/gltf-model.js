@@ -11,9 +11,11 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 
 // Розбирання дворівневе: блоки розходяться між собою (GROUP), деталі — всередині блоку (INNER)
 const EXPLODE_FACTOR = 1;
-const EXPLODE_GROUP = 1.4;  // блоки між собою (лише по X)
-const EXPLODE_INNER = 0.5; // деталі всередині блоку: частка відстані до центру блоку
-const EXPLODE_GAP = 110;     // мінімальний відступ кожної плити, мм
+const EXPLODE_GROUP = 0;    // блоки між собою — тепер розкладаються в ряд (див. «Розкладка блоків»)
+const EXPLODE_BLOCK_GAP = 220; // проміжок між розібраними блоками, мм
+const EXPLODE_LIFT = 180;      // на скільки стільниця й раковина піднімаються над розібраним блоком, мм
+const EXPLODE_INNER = 0.3; // деталі всередині блоку: частка відстані до центру блоку
+const EXPLODE_GAP = 90;      // мінімальний відступ кожної плити, мм
 const HIGHLIGHT = new THREE.Color(0x2f6fd6);
 
 // БАЗИС пише назву так: «Назва\rАртикул» (інколи ще дубль через табуляцію)
@@ -456,10 +458,82 @@ export async function loadGltfModel(buffer, title) {
   for (const op of openers) {
     // Усе, що рухається разом із фасадом, і розбирається разом з ним
     // Шухляда чи двері рухаються цілими: зсув фасаду + додатково вперед, щоб ящик повністю вийшов із корпусу
-    const shared = outwardOf(op.facade).add(new THREE.Vector3(0, 0, op.kind === 'drawer' ? op.slide : 120));
+    const shared = outwardOf(op.facade).add(new THREE.Vector3(0, 0, op.kind === 'drawer' ? op.slide : 300));
     op.box = new THREE.Box3();
     for (const p of op.parts) op.box.union(p.box);
     for (const p of op.parts) for (const rec of p.meshes) { rec.outward = shared; rec.opener = op; }
+  }
+
+  // ---- Розкладка блоків у ряд (щоб розібрані блоки не налазили один на одного) ----
+  // Стільниця, раковина, змішувач піднімаються над блоком під ними; розетки й вимикачі лише їдуть разом з ним.
+  // Поодинокі деталі верхнього рівня (царга тощо), що сидять усередині блоку, приєднуються до нього.
+  const LIFT_RE = /стільниц|столешн|мойк|раковин|смесит|змішув/i;
+  const FOLLOW_RE = /розетк|gniazd|включат|вимикач|wy.?cznik/i;
+  const groupOfRec = (rec) => (rec.opener ? rec.opener.facade : (rec.part.host || rec.part)).group;
+  const raw = new Map();
+  for (const rec of meshes) {
+    if (rec.part.key === 'room') continue;
+    const g = groupOfRec(rec);
+    if (!raw.has(g)) raw.set(g, { box0: new THREE.Box3(), boards: new Set() });
+    const r = raw.get(g);
+    r.box0.union(rec.part.box);
+    if (rec.part.board) r.boards.add(rec.part);
+  }
+  const vol = (b) => (b.isEmpty() ? 0 : (b.max.x - b.min.x) * (b.max.y - b.min.y) * (b.max.z - b.min.z));
+  const alias = new Map();
+  for (const [g, r] of raw) {
+    if (r.boards.size > 2 || LIFT_RE.test(g.name) || FOLLOW_RE.test(g.name)) continue;
+    let best = null;
+    let bestV = 0;
+    for (const [mg, mr] of raw) {
+      if (mg === g || mr.boards.size <= 2) continue;
+      const v = vol(r.box0.clone().intersect(mr.box0));
+      if (v > bestV) { bestV = v; best = mg; }
+    }
+    if (best) alias.set(g, best);
+  }
+  const canon = (g) => alias.get(g) || g;
+
+  const gInfo = new Map();
+  for (const rec of meshes) {
+    if (rec.part.key === 'room') continue;
+    const g = canon(groupOfRec(rec));
+    if (!gInfo.has(g)) gInfo.set(g, { box0: new THREE.Box3(), boxE: new THREE.Box3() });
+    const info = gInfo.get(g);
+    info.box0.union(rec.part.box);
+    info.boxE.union(rec.part.box.clone().translate(rec.outward));
+  }
+  const isRowBlock = (g) => !LIFT_RE.test(g.name) && !FOLLOW_RE.test(g.name);
+  const centerX = (b) => (b.min.x + b.max.x) / 2;
+  const main = [...gInfo].filter(([g]) => isRowBlock(g)).sort((a, b) => centerX(a[1].box0) - centerX(b[1].box0));
+  const shiftOf = new Map();
+  let cursor = -Infinity;
+  for (const [g, info] of main) {
+    const sx = Number.isFinite(cursor) ? Math.max(0, cursor + EXPLODE_BLOCK_GAP - info.boxE.min.x) : 0;
+    shiftOf.set(g, new THREE.Vector3(sx, 0, 0));
+    cursor = info.boxE.max.x + sx;
+  }
+  // Ряд центруємо відносно початкового положення, щоб камера не «їхала» вбік
+  const xs = [...shiftOf.values()].map((v) => v.x);
+  const mid = xs.length ? (Math.min(...xs) + Math.max(...xs)) / 2 : 0;
+  for (const v of shiftOf.values()) v.x -= mid;
+  // Накладки й розетки: зсув як у блоку під ними (найбільше перекриття по X); стільниця й раковина ще й піднімаються
+  for (const [g, info] of gInfo) {
+    if (shiftOf.has(g)) continue;
+    let best = null;
+    let bestOverlap = 0;
+    for (const [mg, mi] of main) {
+      const ov = Math.min(info.box0.max.x, mi.box0.max.x) - Math.max(info.box0.min.x, mi.box0.min.x);
+      if (ov > bestOverlap) { bestOverlap = ov; best = [mg, mi]; }
+    }
+    const sh = best ? shiftOf.get(best[0]).clone() : new THREE.Vector3();
+    if (LIFT_RE.test(g.name) && best) sh.y = Math.max(0, best[1].boxE.max.y + EXPLODE_LIFT - info.box0.min.y);
+    shiftOf.set(g, sh);
+  }
+  for (const rec of meshes) {
+    if (rec.part.key === 'room') continue;
+    const sh = shiftOf.get(canon(groupOfRec(rec)));
+    if (sh) rec.outward = rec.outward.clone().add(sh);
   }
 
   // Розбирання не опускає деталі нижче найнижчої точки меблів (інакше вони «провалюються» в підлогу)
