@@ -100,7 +100,7 @@ function addFasteners(root, list) {
   const up = new THREE.Vector3(0, 1, 0);
   for (const f of list) {
     const type = FASTENER_TYPES.find((t) => t.re.test(f.name || ''));
-    if (!type || !Array.isArray(f.p) || !Array.isArray(f.az)) continue; // решта (ручки, ніжки) вже має геометрію
+    if (!type || !Array.isArray(f.p) || !Array.isArray(f.ax)) continue; // решта (ручки, ніжки) вже має геометрію
     // Розмір з назви: «8х30 мм», «6,4х50 мм»
     const m = /([0-9]+(?:[.,][0-9]+)?) *[хx×] *([0-9]+(?:[.,][0-9]+)?)/i.exec(f.name);
     const d = m ? parseFloat(m[1].replace(',', '.')) : type.d;
@@ -113,7 +113,8 @@ function addFasteners(root, list) {
       });
     }
     const { geo, mat } = cache.get(key);
-    const axis = new THREE.Vector3(...f.az).normalize();
+    // Вісь кріплення в БАЗИСі — локальна X (перевірено: так усі шканти й конфірмати перетинають стик плит)
+    const axis = new THREE.Vector3(...f.ax).normalize();
     const node = new THREE.Object3D();
     node.name = f.name;
     const mesh = new THREE.Mesh(geo, mat);
@@ -204,7 +205,7 @@ export async function loadGltfModel(buffer, title) {
   // Параметри виробу з БАЗИСу (назва, префікс, артикул, замовлення), якщо конвертер їх додав
   const info = gltf.scene.userData?.m3 || gltf.userData?.m3 || null;
   // Кріплення з БАЗИСу (скрипт «Експорт для 3D-перегляду»): у .dae їх немає, тому малюємо самі.
-  // Розмір беремо з назви («8х30», «6,4х50»), вісь — локальна Z кріплення, точка — його початок.
+  // Розмір беремо з назви («8х30», «6,4х50»), вісь — локальна X кріплення, точка — його початок.
   if (info && Array.isArray(info.fasteners)) addFasteners(gltf.scene, info.fasteners);
 
 

@@ -432,3 +432,11 @@ body {
 .kp-pages { display: flex; flex-direction: column; gap: 10px; margin: 10px 0; }
 .kp-pages canvas { display: block; border-radius: 6px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12); background: #fff; }
 .sheet:has(.kp) { max-width: 900px; }
+
+/* Матеріали проєкту: рядок «мініатюра + група + назва» */
+.mat-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.mat-row:last-of-type { border-bottom: 0; }
+.mat-swatch { flex: none; width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--border); background-size: cover; }
+.mat-text { display: flex; flex-direction: column; min-width: 0; }
+.mat-group { font-size: 12px; color: var(--hint); text-transform: uppercase; letter-spacing: 0.03em; }
+.mat-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -106,21 +106,16 @@ export function createPanel(container, handlers, colors, opts = {}) {
   if (opts.materialSlots && opts.materialSlots.length && opts.materialOptions && opts.materialOptions.length) {
     // Матеріали з самої моделі: для кожної групи (фасади, корпус, стільниця) свій вибір
     blocks.push(section('Матеріали'));
+    // Матеріали проєкту: для кожної групи — її матеріал (мініатюра текстури + назва), без вибору
     for (const slot of opts.materialSlots) {
-      // Лише матеріали з проєкту; на старті вибрано той, що стоїть у моделі
-      const options = opts.materialOptions;
-      const label = h('div', { class: 'hint slot-label' }, `${slot.label}: ${options[slot.current].short || options[slot.current].name}`);
-      const btns = options.map((o, i) => h('button', {
-        class: 'swatch', type: 'button', title: o.name, 'aria-label': `${slot.label}: ${o.name}`,
-        style: `background:${o.swatch}`,
-        onclick: () => {
-          btns.forEach((b, j) => b.classList.toggle('active', j === i));
-          label.textContent = `${slot.label}: ${o.short || o.name}`;
-          handlers.onSlotMaterial(slot.id, i === slot.current ? null : i); // свій матеріал — повертаємо оригінал з крайками
-        },
-      }));
-      btns[slot.current].classList.add('active');
-      blocks.push(label, h('div', { class: 'swatches' }, ...btns));
+      const o = opts.materialOptions[slot.current];
+      blocks.push(h('div', { class: 'mat-row' },
+        h('span', { class: 'mat-swatch', style: `background:${o.swatch}`, title: o.name }),
+        h('span', { class: 'mat-text' },
+          h('span', { class: 'mat-group' }, slot.label),
+          h('span', { class: 'mat-name' }, o.short || o.name),
+        ),
+      ));
     }
   } else if (showFacades) {
     blocks.push(section('Колір фасадів'), h('div', { class: 'swatches' }, ...swatches), colorName);

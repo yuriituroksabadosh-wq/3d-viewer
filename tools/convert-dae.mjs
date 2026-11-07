@@ -155,7 +155,11 @@ const scene = root.getDefaultScene() || root.listScenes()[0];
 // Параметри виробу з БАЗИСу (скрипт «Експорт для 3D-перегляду» пише m3-viewer.json поруч із моделлю)
 const infoPath = path.join(daeDir, "m3-viewer.json");
 if (fs.existsSync(infoPath)) {
-  const meta = JSON.parse(fs.readFileSync(infoPath, "utf8").replace(/^﻿/, ""));
+  // UTF-8 (через fs) або cp1251 (запасний запис скрипта через system.writeTextFile)
+  const rawInfo = fs.readFileSync(infoPath);
+  let infoText = new TextDecoder("utf-8").decode(rawInfo).replace(/^﻿/, "");
+  if (infoText.includes("�")) infoText = new TextDecoder("windows-1251").decode(rawInfo);
+  const meta = JSON.parse(infoText);
   const m3 = {
     name: meta.name || "",
     prefix: meta.prefix || "",
