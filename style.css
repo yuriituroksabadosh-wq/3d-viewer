@@ -444,3 +444,5 @@ body {
 /* Режим знімка (?shot=1): лише сцена й логотип — для прев'ю в Telegram */
 body.shot #header, body.shot #sidebar, body.shot #toolbar, body.shot #viewcube, body.shot #loader, body.shot #toast { display: none !important; }
 body.shot .watermark { height: 56px; opacity: 0.85; right: 20px; bottom: 18px; }
+/* У режимі знімка сцена займає все вікно — інакше кадр виходить дрібним */
+body.shot #stage { position: fixed; inset: 0; min-height: 0; }

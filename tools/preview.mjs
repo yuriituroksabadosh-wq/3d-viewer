@@ -33,8 +33,8 @@ const browser = await puppeteer.launch({
 });
 try {
   const page = await browser.newPage();
-  // 1280×800 — Telegram показує фото до ~1280 px; пропорція як у прев'ю каналів
-  await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
+  // 1280×720 (16:9): Telegram показує фото до ~1280 px, а для BotFather потрібні рівно 640×360
+  await page.setViewport({ width: 1280, height: 720, deviceScaleFactor: 1 });
   page.on('pageerror', (e) => console.error('Помилка сторінки:', e.message));
   await page.goto(`${site}?model=${slug}&shot=1`, { waitUntil: 'networkidle0', timeout: 120000 });
   await page.waitForFunction(() => window.__shot || !document.getElementById('error').hidden, { timeout: 120000 });
