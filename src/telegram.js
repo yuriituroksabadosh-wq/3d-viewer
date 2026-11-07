@@ -11,6 +11,10 @@ export function initTelegram() {
   try {
     tg.ready();
     tg.expand();
+    // Інакше свайп пальцем униз по моделі Telegram сприймає як «згорнути застосунок» і крутити модель неможливо
+    if (typeof tg.disableVerticalSwipes === 'function') tg.disableVerticalSwipes();
+    // Підтвердження перед закриттям, щоб випадковий жест не закрив модель
+    if (typeof tg.enableClosingConfirmation === 'function') tg.enableClosingConfirmation();
     applyTheme(tg.themeParams);
     // Схема теми (світла/темна) — для логотипу; у звичайному браузері platform === 'unknown'
     if (tg.platform && tg.platform !== 'unknown') document.documentElement.dataset.scheme = tg.colorScheme || 'light';
