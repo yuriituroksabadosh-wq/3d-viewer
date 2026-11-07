@@ -94,7 +94,26 @@ export function createPanel(container, handlers, colors, opts = {}) {
     openBtn && row(openBtn),
     row(button('Розібрати', () => handlers.onExplode(1)), button('Зібрати', () => handlers.onExplode(0))),
   ];
-  if (showFacades) {
+  if (opts.materialSlots && opts.materialSlots.length && opts.materialOptions && opts.materialOptions.length) {
+    // Матеріали з самої моделі: для кожної групи (фасади, корпус, стільниця) свій вибір
+    blocks.push(section('Матеріали'));
+    for (const slot of opts.materialSlots) {
+      const label = h('div', { class: 'hint slot-label' }, `${slot.label}: як у проєкті`);
+      const choices = [{ name: 'Як у проєкті', swatch: 'linear-gradient(135deg,#f6f4ef 0%,#d8d1c5 100%)', index: null },
+        ...opts.materialOptions.map((o, i) => ({ ...o, index: i }))];
+      const btns = choices.map((c) => h('button', {
+        class: 'swatch', type: 'button', title: c.name, 'aria-label': `${slot.label}: ${c.name}`,
+        style: `background:${c.swatch}`,
+        onclick: () => {
+          btns.forEach((b) => b.classList.toggle('active', b === btns[choices.indexOf(c)]));
+          label.textContent = `${slot.label}: ${c.name.toLowerCase() === 'як у проєкті' ? 'як у проєкті' : c.name}`;
+          handlers.onSlotMaterial(slot.id, c.index);
+        },
+      }));
+      btns[0].classList.add('active');
+      blocks.push(label, h('div', { class: 'swatches' }, ...btns));
+    }
+  } else if (showFacades) {
     blocks.push(section('Колір фасадів'), h('div', { class: 'swatches' }, ...swatches), colorName);
   }
   blocks.push(row(button('Скинути вид', () => handlers.onReset(), 'btn btn-wide')));

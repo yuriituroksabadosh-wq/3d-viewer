@@ -137,7 +137,11 @@ async function main() {
 
   viewer.resize();
   viewer.frame(model.bounds);
-  $('title').textContent = model.name;
+  // Шапка: назва виробу і префікс позначення (номер замовлення) з БАЗИСу
+  const subtitle = [model.info?.prefix, model.info?.order && model.info.order !== model.info.prefix ? model.info.order : ""].filter(Boolean).join(" · ");
+  $('title').textContent = subtitle ? `${model.name} · ${subtitle}` : model.name;
+  $('loader-name').textContent = model.name;
+  document.title = `${model.name} — М3 Меблі`;
   $('loader-fill').style.width = '100%';
   $('loader').classList.add('done');
   viewer.intro();
@@ -313,8 +317,9 @@ async function main() {
     onSpin: (on) => viewer.setSpin(on, roomSpin),
     onExplode: (t) => model.setExplode(t),
     onFacadeColor: (hex) => model.setMaterialColor('facade', hex),
+    onSlotMaterial: (slot, index) => model.setSlotMaterial(slot, index),
     onReset: () => viewer.resetView(),
-  }, colorOptions, { facades: model.hasFacades, viewMode: isGlbModel ? model.viewMode : undefined });
+  }, colorOptions, { facades: model.hasFacades, viewMode: isGlbModel ? model.viewMode : undefined, materialSlots: model.materialSlots, materialOptions: model.materialOptions });
   viewer.onSpinStop = () => panel.setSpin(false);
 
   // ---- Кубик орієнтації ----

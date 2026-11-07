@@ -83,6 +83,21 @@ const TECHNICAL = /шкант|конфірмат|комформат|конфир
 const isFacadeName = (n) => n.startsWith('фасад') || n === 'двері';
 const isRoomName = (n) => n === 'стіна' || n === 'заміри';
 
+/** Мініатюра для кнопки вибору матеріалу: шматок текстури (dataURL) або CSS-колір. */
+function swatchOf(m) {
+  try {
+    const img = m.map && m.map.image;
+    if (img && img.width) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const side = Math.min(img.width, img.height, 512);
+      c.getContext('2d').drawImage(img, 0, 0, side, side, 0, 0, 64, 64);
+      return `center/cover url(${c.toDataURL('image/jpeg', 0.8)})`;
+    }
+  } catch { /* текстура недоступна — беремо колір */ }
+  return m.color ? `#${m.color.getHexString()}` : '#ccc';
+}
+
 /**
  * Шукає, що відкривається. Двері — фасад, біля якого стоять петлі (сторона петель = вісь повороту).
  * Шухляда — фасад без петель, за яким стоять деталі ящика (боки, дно). Ручки й петлі рухаються з фасадом.
@@ -138,6 +153,8 @@ export async function loadGltfModel(buffer, title) {
   loader.setMeshoptDecoder(MeshoptDecoder);
   const gltf = await loader.parseAsync(buffer, '');
   gltf.scene.updateMatrixWorld(true);
+  // Параметри виробу з БАЗИСу (назва, префікс, артикул, замовлення), якщо конвертер їх додав
+  const info = gltf.scene.userData?.m3 || gltf.userData?.m3 || null;
 
   // Сітки → деталі (поки що оригінальні сітки файлу)
   const byNode = new Map();
@@ -304,6 +321,9 @@ export async function loadGltfModel(buffer, title) {
       if (rec.part.xrayMat) return rec.part.xrayMat;
       return rec.original;
     }
+    // Заміна матеріалу для групи (фасади/корпус/стільниця): лише плити й крайки, фурнітура не змінюється
+    const ov = rec.part.slot && slotOverride.get(rec.part.slot);
+    if (ov && rec.swappable) return ov;
     return rec.part.key === 'facade' && facadeOverride ? facadeOverride : rec.original;
   }
 
@@ -345,6 +365,38 @@ export async function loadGltfModel(buffer, title) {
     for (const p of selection) applyHighlight(p);
   }
   const highlight = (part) => select(part ? [part] : []);
+
+  // ---- Матеріали моделі: заміна для фасадів, корпусу, стільниці (лише ті матеріали, що є в моделі) ----
+  const matName = (m) => splitName(m?.name || '').title;
+  const slotOverride = new Map();
+  for (const part of parts) {
+    if (part.key === 'room' || !part.board) { part.slot = null; continue; }
+    const names = part.meshes.map((r) => matName(r.original)).join(' ');
+    part.slot = part.key === 'facade' ? 'facade' : /стільниц|столешн/i.test(names) ? 'top' : 'corpus';
+  }
+  for (const rec of meshes) {
+    const n = matName(rec.original);
+    rec.swappable = /дсп|мдф|стільниц|столешн|крайка|kronospan|egger|swiss|cleaf|agt|шпон|акрил|пластик hpl/i.test(n) && !/скло|стекло/i.test(n);
+  }
+  // Варіанти: різні плитні матеріали моделі (без крайок, ХДФ, стін і скла)
+  const options = [];
+  const seen = new Set();
+  for (const rec of meshes) {
+    const n = matName(rec.original);
+    if (!rec.swappable || /крайка|хдф/i.test(n) || seen.has(n) || rec.part.key === 'room') continue;
+    seen.add(n);
+    options.push({ name: n, material: rec.original, swatch: swatchOf(rec.original) });
+  }
+  const SLOT_LABELS = { facade: 'Фасади', corpus: 'Корпус', top: 'Стільниця' };
+  const slots = Object.keys(SLOT_LABELS)
+    .filter((id) => parts.some((p) => p.slot === id))
+    .map((id) => ({ id, label: SLOT_LABELS[id] }));
+
+  function setSlotMaterial(slot, index) {
+    if (index === null || index === undefined) slotOverride.delete(slot);
+    else slotOverride.set(slot, options[index].material);
+    repaint();
+  }
 
   function setMaterialColor(key, hex) {
     if (key !== 'facade') return;
@@ -442,7 +494,8 @@ export async function loadGltfModel(buffer, title) {
 
   return {
     kind: 'glb',
-    name: title,
+    name: info?.name || title,
+    info,
     group,
     parts,
     bounds,
@@ -462,6 +515,9 @@ export async function loadGltfModel(buffer, title) {
     setOpen(t) { openTarget = Math.min(1, Math.max(0, t)); },
     openers: { doors: openers.filter((o) => o.kind === 'door').length, drawers: openers.filter((o) => o.kind === 'drawer').length },
     setMaterialColor,
+    materialSlots: slots,
+    materialOptions: options.map((o) => ({ name: o.name, swatch: o.swatch })),
+    setSlotMaterial,
     setKeyVisible,
     setClientView,
     isolate,

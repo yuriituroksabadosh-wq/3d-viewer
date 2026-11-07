@@ -17,7 +17,10 @@ import sharp from 'sharp';
 
 const require = createRequire(import.meta.url);
 
-const [daeArg, slug] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const [daeArg, slug] = args.filter((a) => !a.startsWith("--"));
+// Повне замовлення з БАЗИСу часто містить ім'я клієнта, а сайт публічний — додаємо лише на явний запит
+const withOrder = args.includes("--with-order");
 if (!daeArg || !slug || !/^[a-zA-Z0-9-]{1,64}$/.test(slug)) {
   console.error('Використання: npm run convert -- "шлях\\до\\Модель.dae" назва-латиницею');
   process.exit(1);
@@ -147,6 +150,22 @@ await doc.transform(
 );
 
 const scene = root.getDefaultScene() || root.listScenes()[0];
+
+// Параметри виробу з БАЗИСу (скрипт «Параметри для 3D-перегляду» пише m3-viewer.json поруч із моделлю)
+const infoPath = path.join(daeDir, "m3-viewer.json");
+if (fs.existsSync(infoPath)) {
+  const meta = JSON.parse(fs.readFileSync(infoPath, "utf8").replace(/^﻿/, ""));
+  const m3 = {
+    name: meta.name || "",
+    prefix: meta.prefix || "",
+    article: meta.article || "",
+    order: withOrder ? meta.order || "" : "",
+  };
+  scene.setExtras({ ...scene.getExtras(), m3 });
+  console.log(`   параметри виробу: «${m3.name}» ${m3.prefix}${withOrder ? ", замовлення: " + m3.order : " (замовлення не додано: --with-order)"}`);
+} else {
+  console.log("   m3-viewer.json не знайдено — назва виробу буде з адреси (запустіть у БАЗИСі «Параметри для 3D-перегляду»)");
+}
 const b = getBounds(scene);
 const size = b.max.map((v, i) => v - b.min[i]);
 console.log(`   після: вузлів ${root.listNodes().length}, сіток ${root.listMeshes().length}, текстур ${root.listTextures().length}`);

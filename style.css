@@ -395,3 +395,4 @@ body {
 .ruler-label span { font-size: 11px; opacity: 0.9; }
 .ruler-label[hidden] { display: none; }
 #rulers { position: absolute; inset: 0; pointer-events: none; }
+.slot-label { margin-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
