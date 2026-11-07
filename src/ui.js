@@ -1,4 +1,4 @@
-// Елементи інтерфейсу: панель керування, вікно деталі, підписи розмірів.
+// Елементи інтерфейсу: панель керування, вікно деталі, підписи розмірів, повідомлення.
 
 /** Маленький хелпер для створення DOM: h('button', { class: 'btn', onclick: fn }, 'Текст') */
 function h(tag, props = {}, ...children) {
@@ -12,60 +12,42 @@ function h(tag, props = {}, ...children) {
   return el;
 }
 
-/** Кнопка-перемикач з текстом для двох станів. */
+/** Кнопка-перемикач з текстом для двох станів. btn.set(on) міняє стан ззовні без виклику onChange. */
 function toggleButton(onText, offText, initial, onChange) {
   let on = initial;
-  const btn = h('button', {
-    class: 'btn',
-    type: 'button',
-    'aria-pressed': String(on),
-    onclick: () => {
-      on = !on;
-      btn.setAttribute('aria-pressed', String(on));
-      btn.textContent = on ? onText : offText;
-      onChange(on);
-    },
-  }, on ? onText : offText);
+  const btn = h('button', { class: 'btn', type: 'button' });
+  const paint = () => {
+    btn.setAttribute('aria-pressed', String(on));
+    btn.textContent = on ? onText : offText;
+  };
+  btn.addEventListener('click', () => { on = !on; paint(); onChange(on); });
+  btn.set = (v) => { on = v; paint(); };
+  paint();
   return btn;
 }
 
+const button = (text, onclick, cls = 'btn') => h('button', { class: cls, type: 'button', onclick }, text);
+const section = (title) => h('div', { class: 'section-title' }, title);
+const row = (...items) => h('div', { class: 'row' }, ...items.filter(Boolean));
+
 /**
  * Панель керування (внизу на телефоні, збоку на ПК).
- * handlers: onDims(bool), onExplode(0|1), onFacadeColor(hex|null), onFacadesVisible(bool),
- *           onRoomVisible(bool) або null, onReset()
- * colors: [{ name, hex, swatch? }], перший елемент уважається вибраним на старті.
- * opts: { facades: bool } — чи є в моделі фасади (якщо ні, блок фасадів не показуємо).
+ * handlers: onDims, onFacadesVisible, onRoomVisible|null, onClientView|null, onSpin,
+ *           onExplode(0|1), onOpen(0|1)|null, onFacadeColor(hex|null), onReset
+ * colors: [{ name, hex, swatch? }], перший уважається вибраним на старті.
+ * opts: { facades: bool, openLabel: string }
+ * Повертає { setSpin(on) } — щоб зняти позначку «Обертання», коли користувач сам крутнув модель.
  */
 export function createPanel(container, handlers, colors, opts = {}) {
   const showFacades = opts.facades !== false;
-  let dimsOn = false;
-  let facadesOn = true;
 
-  const dimsBtn = h('button', {
-    class: 'btn',
-    type: 'button',
-    'aria-pressed': 'false',
-    onclick: () => {
-      dimsOn = !dimsOn;
-      dimsBtn.setAttribute('aria-pressed', String(dimsOn));
-      handlers.onDims(dimsOn);
-    },
-  }, 'Показати розміри');
+  const dimsBtn = toggleButton('Розміри: показані', 'Показати розміри', false, handlers.onDims);
+  const facadesBtn = showFacades && toggleButton('Фасади: показані', 'Фасади: приховані', true, handlers.onFacadesVisible);
+  const roomBtn = handlers.onRoomVisible && toggleButton('Стіни: показані', 'Стіни: приховані', true, handlers.onRoomVisible);
+  const clientBtn = handlers.onClientView && toggleButton('Як бачить клієнт: увімк.', 'Як бачить клієнт: вимк.', true, handlers.onClientView);
+  const spinBtn = toggleButton('Обертання: увімк.', 'Обертання', false, handlers.onSpin);
 
-  const facadesBtn = h('button', {
-    class: 'btn',
-    type: 'button',
-    'aria-pressed': 'true',
-    onclick: () => {
-      facadesOn = !facadesOn;
-      facadesBtn.setAttribute('aria-pressed', String(facadesOn));
-      facadesBtn.textContent = facadesOn ? 'Фасади: показані' : 'Фасади: приховані';
-      handlers.onFacadesVisible(facadesOn);
-    },
-  }, 'Фасади: показані');
-
-  const explodeBtn = h('button', { class: 'btn', type: 'button', onclick: () => handlers.onExplode(1) }, 'Розібрати');
-  const assembleBtn = h('button', { class: 'btn', type: 'button', onclick: () => handlers.onExplode(0) }, 'Зібрати');
+  const openBtn = handlers.onOpen && toggleButton('Закрити', opts.openLabel || 'Відкрити двері й шухляди', false, (on) => handlers.onOpen(on ? 1 : 0));
 
   const colorName = h('div', { class: 'hint' }, colors[0]?.name ?? '');
   const swatches = colors.map((c, i) => h('button', {
@@ -74,70 +56,97 @@ export function createPanel(container, handlers, colors, opts = {}) {
     title: c.name,
     'aria-label': c.name,
     style: `background:${c.swatch || c.hex}`,
-    onclick: () => pickColor(i),
+    onclick: () => { mark(i); handlers.onFacadeColor(colors[i].hex); },
   }));
-
-  // Позначає вибраний колір без виклику обробника (для старту)
-  function markColor(i) {
+  function mark(i) {
     swatches.forEach((s, j) => s.classList.toggle('active', i === j));
     colorName.textContent = colors[i].name;
   }
-  function pickColor(i) {
-    markColor(i);
-    handlers.onFacadeColor(colors[i].hex);
-  }
-  markColor(0);
+  mark(0);
 
-  const resetBtn = h('button', { class: 'btn btn-wide', type: 'button', onclick: () => handlers.onReset() }, 'Скинути вид');
-
-  // Стіни кімнати (лише для моделей з БАЗИСу, де вони є)
-  const viewRow = h('div', { class: 'row' }, dimsBtn);
-  if (showFacades) viewRow.append(facadesBtn);
-  const extraRow = h('div', { class: 'row' });
-  if (handlers.onRoomVisible) {
-    extraRow.append(toggleButton('Стіни: показані', 'Стіни: приховані', true, handlers.onRoomVisible));
+  // Режими відображення (як у БАЗИСі): один вибраний
+  let modeRow = null;
+  if (handlers.onViewMode) {
+    const modes = [
+      ["real-lines", "Текстури з лініями"],
+      ["real", "Текстури"],
+      ["lines", "Контури"],
+      ["xray", "Рентген"],
+    ];
+    const btns = modes.map(([id, label]) => {
+      const b = button(label, () => {
+        btns.forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+        handlers.onViewMode(id);
+      }, "btn btn-small");
+      b.setAttribute("aria-pressed", String(id === (opts.viewMode || "real-lines")));
+      return b;
+    });
+    modeRow = h("div", { class: "row modes" }, ...btns);
   }
 
   const blocks = [
-    h('div', { class: 'section-title' }, 'Вигляд'),
-    viewRow,
+    section('Вигляд'),
+    modeRow,
+    row(dimsBtn, facadesBtn),
+    row(roomBtn, spinBtn),
+    clientBtn && row(clientBtn),
+    section('Анімація'),
+    openBtn && row(openBtn),
+    row(button('Розібрати', () => handlers.onExplode(1)), button('Зібрати', () => handlers.onExplode(0))),
   ];
-  if (extraRow.childElementCount) blocks.push(extraRow);
-  blocks.push(
-    h('div', { class: 'section-title' }, 'Розбирання'),
-    h('div', { class: 'row' }, explodeBtn, assembleBtn),
-  );
   if (showFacades) {
-    blocks.push(
-      h('div', { class: 'section-title' }, 'Колір фасадів'),
-      h('div', { class: 'swatches' }, ...swatches),
-      colorName,
-    );
+    blocks.push(section('Колір фасадів'), h('div', { class: 'swatches' }, ...swatches), colorName);
   }
-  blocks.push(h('div', { class: 'row' }, resetBtn));
-  container.replaceChildren(...blocks);
+  blocks.push(row(button('Скинути вид', () => handlers.onReset(), 'btn btn-wide')));
+  container.replaceChildren(...blocks.filter(Boolean));
+
+  return { setSpin: (on) => spinBtn.set(on) };
 }
 
-/** Вікно з назвою і розмірами вибраної деталі. info = { title, dims, material } */
+/**
+ * Вікно вибраної деталі.
+ * info = { title, dims, material, article, group, groupCount }
+ * actions = { isolated: bool, onIsolate(), onFocus() } — кнопки для деталі (лише для моделей з БАЗИСу)
+ */
 export function createInfoBox(el) {
   return {
     message(text) {
       el.replaceChildren(h('div', { class: 'hint' }, text));
     },
-    show(info) {
+    show(info, actions) {
       if (!info) {
         el.replaceChildren(h('div', { class: 'hint' }, 'Натисніть на деталь, щоб побачити її назву й розміри.'));
+        if (actions && actions.isolated) {
+          el.append(row(button('Показати все', actions.onIsolate)));
+        }
         return;
       }
-      const rows = [
-        h('strong', {}, info.title),
-        h('div', { class: 'hint' }, `Розміри: ${info.dims}`),
-      ];
+      const rows = [];
+      if (info.group && info.group !== info.title) {
+        rows.push(h('div', { class: 'group-tag' }, info.group));
+      }
+      rows.push(h('strong', {}, info.title));
+      rows.push(h('div', { class: 'hint' }, `Розміри: ${info.dims}`));
       if (info.material) rows.push(h('div', { class: 'hint' }, `Матеріал: ${info.material}`));
       if (info.article) rows.push(h('div', { class: 'hint' }, `Артикул: ${info.article}`));
+      if (info.groupCount > 1) rows.push(h('div', { class: 'hint' }, `У групі «${info.group}»: ${info.groupCount} деталей`));
+      if (actions) {
+        rows.push(row(
+          button(actions.isolated ? 'Показати все' : 'Ізолювати групу', actions.onIsolate, 'btn btn-small'),
+          button('Наблизити', actions.onFocus, 'btn btn-small'),
+        ));
+      }
       el.replaceChildren(...rows);
     },
   };
+}
+
+/** Коротке повідомлення поверх сцени (зникає саме). */
+export function toast(el, text, ms = 2200) {
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.hidden = true; }, ms);
 }
 
 /** Підписи розмірів, які слідують за 3D-точками при обертанні камери. */

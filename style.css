@@ -32,16 +32,97 @@ body {
 }
 
 #header {
-  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
   font-weight: 600;
   font-size: 17px;
-  text-align: center;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+}
+#header .logo { height: 34px; width: auto; flex: none; }
+#title {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.icon-btn {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--btn);
+  color: var(--btn-text);
+  cursor: pointer;
+}
+.icon-btn[hidden] { display: none; }
+/* Логотип темний і кольоровий: на темній темі Telegram кладемо його на світлу підкладку */
+:root[data-scheme="dark"] .logo,
+:root[data-scheme="dark"] .watermark { background: #f4f1ec; border-radius: 8px; padding: 3px; }
+
+/* Екран завантаження з логотипом */
+#loader {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: var(--stage);
+  transition: opacity 0.5s ease;
+  z-index: 2;
+}
+#loader.done { opacity: 0; pointer-events: none; }
+/* Кругла фірмова плашка: бежеве тло і тонке золоте коло, як у логотипі М3 */
+#loader .badge {
+  width: min(240px, 62vw);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 40%, #fbf7f1 0%, #f1e8dc 100%);
+  box-shadow: 0 0 0 2px #c9a46a, 0 10px 30px rgba(80, 60, 30, 0.12);
+  display: grid;
+  place-items: center;
+  animation: pulse 1.8s ease-in-out infinite;
+}
+#loader .badge img { width: 74%; height: auto; }
+#loader-name { font-weight: 700; font-size: 20px; color: var(--text); text-align: center; padding: 0 16px; }
+.loader-bar { width: min(300px, 70vw); height: 6px; border-radius: 3px; background: rgba(0, 0, 0, 0.1); overflow: hidden; }
+#loader-fill { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #c9a46a, #8b6a3e); transition: width 0.2s; }
+#loader-text { font-size: 13px; color: var(--hint); font-variant-numeric: tabular-nums; }
+@keyframes pulse { 0%, 100% { transform: scale(0.97); } 50% { transform: scale(1); } }
+
+/* Логотип-знак у кутку сцени */
+.watermark {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  height: 30px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Коротке повідомлення («Посилання скопійовано») */
+#toast {
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%);
+  background: rgba(30, 30, 30, 0.85);
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  z-index: 3;
+}
+#toast[hidden] { display: none; }
 
 #body {
   flex: 1;
@@ -173,3 +254,144 @@ body {
     box-shadow: none;
   }
 }
+
+/* Назва групи (блоку з БАЗИСу) над назвою деталі */
+.group-tag {
+  display: inline-block;
+  margin-bottom: 4px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #c9a46a;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+#info .row { margin: 8px 0 0; }
+.btn-small { min-height: 38px; font-size: 14px; }
+
+/* Кубик орієнтації в правому верхньому куті сцени */
+#viewcube { position: absolute; top: 10px; right: 10px; width: 84px; height: 84px; z-index: 1; }
+#viewcube canvas { display: block; }
+
+/* Перемикач режимів відображення: 2×2 */
+.row.modes .btn { flex: 1 1 calc(50% - 4px); }
+
+/* Панель іконок над сценою (зліва вгорі) */
+#toolbar { position: absolute; top: 10px; left: 10px; display: flex; gap: 8px; z-index: 1; }
+.tool {
+  width: 44px; height: 44px;
+  display: grid; place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #3a3d42;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+.tool[aria-pressed="true"] { background: #c9a46a; border-color: #b08a50; color: #fff; }
+.tool:disabled { opacity: 0.4; cursor: default; }
+.tool svg { width: 22px; height: 22px; }
+
+/* ---- Меню в шапці ---- */
+.menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 230px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+  padding: 6px;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.menu-item:hover { background: var(--bg); }
+.menu-icon { width: 22px; text-align: center; color: #b08a50; font-size: 18px; }
+
+/* ---- Аркуш (список деталей, інструкція) ---- */
+.sheet-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.sheet {
+  width: 100%;
+  max-width: 520px;
+  max-height: 80dvh;
+  overflow-y: auto;
+  background: var(--surface);
+  border-radius: 18px 18px 0 0;
+  padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+}
+@media (min-width: 900px) {
+  .sheet-wrap { align-items: center; }
+  .sheet { border-radius: 18px; }
+}
+.sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 17px; }
+.search {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  margin-bottom: 6px;
+}
+.parts-group { margin: 14px 0 4px; font-size: 13px; font-weight: 700; color: #b08a50; text-transform: uppercase; letter-spacing: 0.03em; }
+.parts-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.parts-item:hover { background: var(--bg); }
+.parts-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.parts-item .hint { flex: none; }
+.help-item { padding: 8px 0; border-bottom: 1px solid var(--border); }
+
+/* ---- Лінійка ---- */
+.ruler-label {
+  position: absolute;
+  transform: translate(-50%, -130%);
+  background: #d9480f;
+  color: #fff;
+  border-radius: 8px;
+  padding: 3px 9px;
+  font-size: 13px;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.ruler-label b { display: block; font-size: 15px; }
+.ruler-label span { font-size: 11px; opacity: 0.9; }
+.ruler-label[hidden] { display: none; }
+#rulers { position: absolute; inset: 0; pointer-events: none; }

@@ -77,8 +77,60 @@ function mergeWorld(list) {
   return geoms.length === 1 ? geoms[0] : mergeGeometries(geoms, false);
 }
 
+// Кріплення й обробки всередині деталей — у режимі «як бачить клієнт» ховаються
+const TECHNICAL = /шкант|конфірмат|комформат|конфирмат|мініфікс|минификс|дюбель|отвір|отверстие|саморіз|саморез|шуруп|стяжк|полкотримач|ексцентрик|линия стыка|лінія стику/i;
+
 const isFacadeName = (n) => n.startsWith('фасад') || n === 'двері';
 const isRoomName = (n) => n === 'стіна' || n === 'заміри';
+
+/**
+ * Шукає, що відкривається. Двері — фасад, біля якого стоять петлі (сторона петель = вісь повороту).
+ * Шухляда — фасад без петель, за яким стоять деталі ящика (боки, дно). Ручки й петлі рухаються з фасадом.
+ */
+function findOpeners(parts) {
+  const by = (re) => parts.filter((p) => p.key !== 'room' && re.test(p.name.title));
+  const hinges = by(/петл/i);
+  const handles = by(/ручк/i);
+  const boxBits = parts.filter((p) => p.key !== 'facade' && p.key !== 'room' && /ящик|яшик|шухляд/i.test(p.name.title));
+  const used = new Set();
+  const inside = (c, b, pad) => c.x > b.min.x - pad && c.x < b.max.x + pad && c.y > b.min.y - pad && c.y < b.max.y + pad;
+  const openers = [];
+
+  for (const f of parts.filter((p) => p.key === 'facade')) {
+    const b = f.box;
+    // Петлі: у межах фасаду по X/Y, по глибині — трохи за фасадом
+    const near = hinges.filter((h) => !used.has(h) && inside(h.center, b, 40) && h.center.z > b.min.z - 150 && h.center.z < b.max.z + 20);
+    // Ручки: на фасаді, спереду
+    const hs = handles.filter((h) => !used.has(h) && inside(h.center, b, 10) && h.center.z > b.max.z - 20 && h.center.z < b.max.z + 80);
+
+    if (near.length) {
+      const avgX = near.reduce((s, h) => s + h.center.x, 0) / near.length;
+      const left = avgX < f.center.x;
+      openers.push({
+        kind: 'door',
+        facade: f,
+        parts: [f, ...near, ...hs],
+        pivot: new THREE.Vector3(left ? b.min.x : b.max.x, 0, b.min.z),
+        sign: left ? -1 : 1, // лівий край — вільний правий край іде на нас (−кут), і навпаки
+        maxAngle: THREE.MathUtils.degToRad(95),
+      });
+      near.concat(hs).forEach((p) => used.add(p));
+      continue;
+    }
+
+    // Деталі ящика: перекриваються з фасадом по X, центр по Y — у межах фасаду, стоять позаду
+    const box = boxBits.filter((p) => !used.has(p)
+      && p.box.max.x > b.min.x + 10 && p.box.min.x < b.max.x - 10
+      && p.center.y > b.min.y - 20 && p.center.y < b.max.y + 20
+      && p.center.z < b.min.z);
+    if (box.length) {
+      const depth = Math.max(...box.map((p) => p.size.z));
+      openers.push({ kind: 'drawer', facade: f, parts: [f, ...box, ...hs], slide: Math.max(150, depth * 0.75) });
+      box.concat(hs).forEach((p) => used.add(p));
+    }
+  }
+  return openers;
+}
 
 /** Завантажує GLB з ArrayBuffer і повертає модель з тим самим інтерфейсом, що й buildFurniture. */
 export async function loadGltfModel(buffer, title) {
@@ -108,6 +160,19 @@ export async function loadGltfModel(buffer, title) {
   });
   const parts = [...byNode.values()];
   if (parts.length === 0) throw new Error('У файлі моделі немає жодної деталі.');
+
+  // Групи: блок верхнього рівня з БАЗИСу («Шафа», «МН - 1 Фасад L», «Стіна»…), до якого належить деталь
+  const isContainer = (n) => !n || /^(node|model|модель|заміри)$/i.test(splitName(n.name).title) || n.isScene;
+  const groups = new Map();
+  for (const part of parts) {
+    let g = part.node;
+    while (g.parent && !isContainer(g.parent)) g = g.parent;
+    if (!groups.has(g)) groups.set(g, { name: splitName(g.name).title || part.name.title, parts: [] });
+    part.group = groups.get(g);
+    part.group.parts.push(part);
+    // Технічні деталі, яких клієнт зовні не бачить
+    part.technical = TECHNICAL.test(part.name.title);
+  }
 
   // Злиття: у межах деталі всі сітки з однаковим матеріалом стають однією сіткою у світових координатах.
   // Було ~2400 викликів малювання на кадр, стає кілька сотень — телефон це тягне.
@@ -163,21 +228,123 @@ export async function loadGltfModel(buffer, title) {
     }
   }
 
+  // ---- Відкривання: двері обертаються на петлях, шухляди висуваються ----
+  const openers = findOpeners(parts);
+  for (const op of openers) {
+    // Усе, що рухається разом із фасадом, і розбирається разом з ним
+    const shared = op.facade.center.clone().sub(bounds.center);
+    for (const p of op.parts) for (const rec of p.meshes) { rec.outward = shared; rec.opener = op; }
+  }
+
   let explodeTarget = 0;
   let explodeNow = 0;
+  let openTarget = 0;
+  let openNow = 0;
+  const Y = new THREE.Vector3(0, 1, 0);
+  const step = (now, target) => {
+    const v = now + (target - now) * 0.1;
+    return Math.abs(target - v) < 0.001 ? target : v;
+  };
+
   function update() {
-    if (explodeNow === explodeTarget) return;
-    explodeNow += (explodeTarget - explodeNow) * 0.12;
-    if (Math.abs(explodeTarget - explodeNow) < 0.001) explodeNow = explodeTarget;
+    if (explodeNow === explodeTarget && openNow === openTarget) return;
+    explodeNow = step(explodeNow, explodeTarget);
+    openNow = step(openNow, openTarget);
+    const ease = openNow * openNow * (3 - 2 * openNow); // плавний старт і зупинка
     for (const rec of meshes) {
       if (rec.part.key === 'room') continue; // стіни не рухаємо
-      rec.mesh.position.copy(rec.home).addScaledVector(rec.outward, EXPLODE_FACTOR * explodeNow);
+      const e = rec.outward.clone().multiplyScalar(EXPLODE_FACTOR * explodeNow);
+      const op = rec.opener;
+      if (op && op.kind === 'door') {
+        // Поворот навколо вертикальної осі петель: позиція = pivot + e − R·pivot
+        const angle = op.sign * op.maxAngle * ease;
+        rec.mesh.rotation.y = angle;
+        rec.mesh.position.copy(op.pivot).add(e).sub(op.pivot.clone().applyAxisAngle(Y, angle));
+      } else if (op && op.kind === 'drawer') {
+        rec.mesh.position.copy(rec.home).add(e).add(new THREE.Vector3(0, 0, op.slide * ease));
+      } else {
+        rec.mesh.position.copy(rec.home).add(e);
+      }
     }
   }
 
+  // ---- Матеріали: колір фасадів, рентген, підсвітка ----
   // Колір фасадів: спільний матеріал-заміна; оригінали лишаються для «Як у проєкті»
   let facadeOverride = null;
-  const baseMaterial = (rec) => (rec.part.key === 'facade' && facadeOverride ? facadeOverride : rec.original);
+
+  // Режими відображення, як у БАЗИСі:
+  //  real-lines — текстури з чорними контурами (як БАЗИС за замовчуванням);
+  //  real  — реалістичний (текстури без ліній);
+  //  lines — «без невидимих»: білі поверхні з чорними контурами, задні лінії сховані;
+  //  xray  — рентген: плити майже невидимі, видно всі тонкі лінії, фурнітура суцільна (шканти жовті, конфірмати рожеві)
+  let mode = "real-lines";
+  const LINES_FILL = new THREE.MeshBasicMaterial({ color: 0xffffff, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+  const XRAY_PANEL = new THREE.MeshBasicMaterial({ color: 0xbfc8d2, transparent: true, opacity: 0.07, depthWrite: false });
+  const XRAY_DOWEL = new THREE.MeshStandardMaterial({ color: 0xf2d652, roughness: 0.6 });
+  const XRAY_SCREW = new THREE.MeshStandardMaterial({ color: 0xe86fd0, roughness: 0.5 });
+  const EDGE_MAT = new THREE.LineBasicMaterial({ color: 0x1f2328, transparent: true, opacity: 0.55 });
+  const EDGE_BLACK = new THREE.LineBasicMaterial({ color: 0x111111 });
+  const isBoard = (part) => part.board;
+  for (const rec of meshes) {
+    for (const m of [].concat(rec.original)) { m.polygonOffset = true; m.polygonOffsetFactor = 1; m.polygonOffsetUnits = 1; }
+  }
+  for (const part of parts) {
+    const names = part.meshes.map((r) => [].concat(r.original).map((m) => m.name || '').join(' ')).join(' ');
+    // Плита/поверхня: ДСП, ХДФ, МДФ, стільниця, крайка, стіни й підлога кімнати
+    part.board = part.key === 'room' || /дсп|хдф|мдф|двп|стільниц|столешн|крайка|kronospan|egger|swiss|скло|стекло|стіна|підлога/i.test(names);
+    part.xrayMat = /шкант/i.test(part.name.title) ? XRAY_DOWEL
+      : /конфірмат|комформат|конфирмат|саморіз|саморез|шуруп|стяжк|мініфікс|минификс|дюбель/i.test(part.name.title) ? XRAY_SCREW
+      : null;
+  }
+
+  function baseMaterial(rec) {
+    if (mode === "lines") return LINES_FILL;
+    if (mode === "xray") {
+      if (isBoard(rec.part)) return XRAY_PANEL;
+      if (rec.part.xrayMat) return rec.part.xrayMat;
+      return rec.original;
+    }
+    return rec.part.key === 'facade' && facadeOverride ? facadeOverride : rec.original;
+  }
+
+  // Контури всіх деталей — рахуються один раз, коли вперше вмикають «Контури» або «Рентген»
+  let edgesReady = false;
+  function ensureEdges() {
+    if (edgesReady) return;
+    edgesReady = true;
+    for (const rec of meshes) {
+      const lines = new THREE.LineSegments(new THREE.EdgesGeometry(rec.mesh.geometry, 25), EDGE_MAT);
+      lines.visible = false;
+      lines.raycast = () => {}; // контури не заважають вибору
+      rec.mesh.add(lines);
+      rec.edges = lines;
+    }
+  }
+
+  // Підсвітка: окремі копії матеріалів лише для сіток вибраних деталей
+  let selection = [];
+  function applyHighlight(part) {
+    for (const rec of part.meshes) {
+      const tint = (m) => {
+        const c = m.clone();
+        if (c.emissive) { c.emissive.copy(HIGHLIGHT); c.emissiveIntensity = 0.45; }
+        else if (c.color) { c.color.copy(HIGHLIGHT); c.opacity = Math.max(c.opacity, 0.35); }
+        return c;
+      };
+      const base = baseMaterial(rec);
+      rec.mesh.material = Array.isArray(base) ? base.map(tint) : tint(base);
+    }
+  }
+  function repaint() {
+    for (const rec of meshes) rec.mesh.material = baseMaterial(rec);
+    for (const p of selection) applyHighlight(p);
+  }
+  function select(list) {
+    for (const p of selection) for (const rec of p.meshes) rec.mesh.material = baseMaterial(rec);
+    selection = list.filter(Boolean);
+    for (const p of selection) applyHighlight(p);
+  }
+  const highlight = (part) => select(part ? [part] : []);
 
   function setMaterialColor(key, hex) {
     if (key !== 'facade') return;
@@ -187,27 +354,19 @@ export async function loadGltfModel(buffer, title) {
       facadeOverride = facadeOverride || new THREE.MeshStandardMaterial({ roughness: 0.6 });
       facadeOverride.color.set(hex);
     }
-    for (const rec of meshes) if (rec.part.key === 'facade') rec.mesh.material = baseMaterial(rec);
-    if (selected && selected.key === 'facade') applyHighlight(selected);
+    repaint();
   }
 
-  // Підсвітка: окремі копії матеріалів лише для сіток вибраної деталі
-  let selected = null;
-  function applyHighlight(part) {
-    for (const rec of part.meshes) {
-      const tint = (m) => {
-        const c = m.clone();
-        if (c.emissive) { c.emissive.copy(HIGHLIGHT); c.emissiveIntensity = 0.45; }
-        return c;
-      };
-      const base = baseMaterial(rec);
-      rec.mesh.material = Array.isArray(base) ? base.map(tint) : tint(base);
+  function setViewMode(next) {
+    mode = next;
+    if (mode !== "real") ensureEdges();
+    for (const rec of meshes) {
+      if (!rec.edges) continue;
+      rec.edges.visible = mode !== "real";
+      rec.edges.material = mode === "xray" ? EDGE_MAT : EDGE_BLACK;
     }
-  }
-  function highlight(part) {
-    if (selected) for (const rec of selected.meshes) rec.mesh.material = baseMaterial(rec);
-    selected = part;
-    if (part) applyHighlight(part);
+    repaint();
+    refreshVisibility();
   }
 
   // Видимість з урахуванням батьків
@@ -226,13 +385,57 @@ export async function loadGltfModel(buffer, title) {
       -((clientY - rect.top) / rect.height) * 2 + 1,
     );
     raycaster.setFromCamera(ndc, camera);
-    const hit = raycaster.intersectObjects(meshList, false).find((h) => isShown(h.object));
-    return hit ? recByMesh.get(hit.object).part : null;
+    const hits = raycaster.intersectObjects(meshList, false).filter((h) => isShown(h.object));
+    if (!hits.length) return null;
+    // У рентгені спершу беремо фурнітуру — заради неї рентген і вмикають
+    const hit = mode === "xray" ? (hits.find((h) => !isBoard(recByMesh.get(h.object).part)) || hits[0]) : hits[0];
+    return recByMesh.get(hit.object).part;
   }
 
+  // ---- Видимість: сховані типи (фасади, стіни), «як бачить клієнт», ізоляція групи, сховані вручну ----
+  const hiddenKeys = new Set();
+  const hiddenParts = new Set();
+  let clientView = true;
+  let isolated = null;
+  const isVisible = (part) => !hiddenKeys.has(part.key)
+    && !hiddenParts.has(part)
+    && !(clientView && mode !== "xray" && part.technical)
+    && (!isolated || part.group === isolated);
+  function refreshVisibility() {
+    for (const rec of meshes) rec.mesh.visible = isVisible(rec.part);
+    if (selection.some((p) => !isVisible(p))) select(selection.filter(isVisible));
+  }
   function setKeyVisible(key, visible) {
-    for (const rec of meshes) if (rec.part.key === key) rec.mesh.visible = visible;
-    if (!visible && selected && selected.key === key) highlight(null);
+    if (visible) hiddenKeys.delete(key); else hiddenKeys.add(key);
+    refreshVisibility();
+  }
+  function setClientView(on) { clientView = on; refreshVisibility(); }
+  function isolate(groupOrNull) { isolated = groupOrNull; refreshVisibility(); }
+  function hide(list) { for (const p of list) hiddenParts.add(p); select([]); refreshVisibility(); }
+  function showAll() { hiddenParts.clear(); isolated = null; refreshVisibility(); }
+  setViewMode(mode);
+
+  /** Пошук деталі за текстом (QR-код, назва, артикул). Повертає список знайдених деталей. */
+  function find(text) {
+    const q = String(text || '').trim().toLowerCase();
+    if (!q) return [];
+    const words = q.split(/[\s,;|/]+/).filter((w) => w.length >= 2);
+    const score = (p) => {
+      const hay = `${p.name.title} ${p.name.article} ${p.group.name}`.toLowerCase();
+      if (hay.includes(q)) return 100;
+      return words.filter((w) => hay.includes(w)).length;
+    };
+    const ranked = parts.filter((p) => p.key !== 'room').map((p) => [p, score(p)]).filter(([, s]) => s > 0);
+    if (!ranked.length) return [];
+    const best = Math.max(...ranked.map(([, s]) => s));
+    return ranked.filter(([, s]) => s === best).map(([p]) => p);
+  }
+
+  /** Габарит набору деталей (для «Наблизити»). */
+  function boxOf(list) {
+    const b = new THREE.Box3();
+    for (const p of list) b.union(p.box);
+    return b;
   }
 
   const count = (key) => parts.filter((p) => p.key === key).length;
@@ -245,10 +448,25 @@ export async function loadGltfModel(buffer, title) {
     bounds,
     update,
     highlight,
+    select,
+    get selection() { return selection; },
     pick,
+    find,
+    boxOf,
+    hide,
+    showAll,
+    setViewMode,
+    get viewMode() { return mode; },
+    get hasHidden() { return hiddenParts.size > 0 || !!isolated; },
     setExplode(t) { explodeTarget = Math.min(1, Math.max(0, t)); },
+    setOpen(t) { openTarget = Math.min(1, Math.max(0, t)); },
+    openers: { doors: openers.filter((o) => o.kind === 'door').length, drawers: openers.filter((o) => o.kind === 'drawer').length },
     setMaterialColor,
     setKeyVisible,
+    setClientView,
+    isolate,
+    get isolated() { return isolated; },
+    technicalCount: parts.filter((p) => p.technical).length,
     hasFacades: count('facade') > 0,
     hasRoom: count('room') > 0,
     // Дані для вікна деталі
@@ -258,6 +476,8 @@ export async function loadGltfModel(buffer, title) {
       for (const rec of part.meshes) for (const m of [].concat(rec.original)) if (m.name) mats.add(splitName(m.name).title);
       return {
         title: part.name.title || 'Деталь',
+        group: part.group.name,
+        groupCount: part.group.parts.filter((p) => !p.technical || !clientView).length,
         article: part.name.article,
         dims: `${Math.round(s.x)} × ${Math.round(s.y)} × ${Math.round(s.z)} мм (ширина × висота × глибина)`,
         // Основний матеріал першим, крайки — в кінці

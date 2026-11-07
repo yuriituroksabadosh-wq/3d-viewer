@@ -12,7 +12,12 @@ export function initTelegram() {
     tg.ready();
     tg.expand();
     applyTheme(tg.themeParams);
-    tg.onEvent?.('themeChanged', () => applyTheme(tg.themeParams));
+    // Схема теми (світла/темна) — для логотипу; у звичайному браузері platform === 'unknown'
+    if (tg.platform && tg.platform !== 'unknown') document.documentElement.dataset.scheme = tg.colorScheme || 'light';
+    tg.onEvent?.('themeChanged', () => {
+      applyTheme(tg.themeParams);
+      if (tg.platform !== 'unknown') document.documentElement.dataset.scheme = tg.colorScheme || 'light';
+    });
   } catch (err) {
     console.warn('Telegram WebApp не ініціалізувався:', err);
   }
