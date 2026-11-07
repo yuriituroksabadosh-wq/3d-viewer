@@ -127,7 +127,7 @@ export function createPanel(container, handlers, colors, opts = {}) {
   blocks.push(row(button('Скинути вид', () => handlers.onReset(), 'btn btn-wide')));
   container.replaceChildren(...blocks.filter(Boolean));
 
-  return { setSpin: (on) => spinBtn.set(on) };
+  return { setSpin: (on) => spinBtn.set(on), setRoom: (on) => roomBtn && roomBtn.set(on) };
 }
 
 /**

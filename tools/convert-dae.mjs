@@ -160,8 +160,12 @@ if (fs.existsSync(infoPath)) {
     prefix: meta.prefix || "",
     article: meta.article || "",
     order: withOrder ? meta.order || "" : "",
+    // Кріплення без геометрії в .dae (шканти, конфірмати…): точка й осі з БАЗИСу
+    fasteners: Array.isArray(meta.fasteners) ? meta.fasteners : [],
+    probes: Array.isArray(meta.probes) ? meta.probes : [],
   };
   scene.setExtras({ ...scene.getExtras(), m3 });
+  console.log(`   кріплень з БАЗИСу: ${m3.fasteners.length}`);
   console.log(`   параметри виробу: «${m3.name}» ${m3.prefix}${withOrder ? ", замовлення: " + m3.order : " (замовлення не додано: --with-order)"}`);
 } else {
   console.log("   m3-viewer.json не знайдено — назва виробу буде з адреси (запустіть у БАЗИСі «Параметри для 3D-перегляду»)");

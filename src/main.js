@@ -293,7 +293,9 @@ async function main() {
       : { name: 'Як у проєкті', hex: model.defaultFacadeColor },
     ...FACADE_COLORS,
   ];
-  const roomSpin = model.hasRoom ? 0.55 : Infinity; // кімната відкрита лише спереду — гойдаємо, а не крутимо по колу
+  const roomSpin = model.hasRoom ? 0.55 : Infinity;
+  let roomShown = true;
+  let roomBeforeExplode = false; // кімната відкрита лише спереду — гойдаємо, а не крутимо по колу
 
   const panel = createPanel($('panel'), {
     onViewMode: isGlbModel ? (m) => model.setViewMode(m) : null,
@@ -303,10 +305,22 @@ async function main() {
       labels.setVisible(on);
     },
     onFacadesVisible: (on) => model.setKeyVisible('facade', on),
-    onRoomVisible: model.hasRoom ? (on) => model.setKeyVisible('room', on) : null,
+    onRoomVisible: model.hasRoom ? (on) => { roomShown = on; model.setKeyVisible('room', on); } : null,
     onClientView: isGlbModel && model.technicalCount ? (on) => { model.setClientView(on); refreshInfo(); } : null,
     onSpin: (on) => viewer.setSpin(on, roomSpin),
-    onExplode: (t) => model.setExplode(t),
+    onExplode: (t) => {
+      model.setExplode(t);
+      if (!isGlbModel) return;
+      if (t) {
+        // Стіни заважають бачити розібрані деталі — ховаємо, а камера відходить, щоб влізло все
+        roomBeforeExplode = model.hasRoom && roomShown;
+        if (roomBeforeExplode) { model.setKeyVisible('room', false); panel.setRoom(false); }
+        viewer.focusBox(model.explodedBox());
+      } else {
+        if (roomBeforeExplode) { model.setKeyVisible('room', true); panel.setRoom(true); roomBeforeExplode = false; }
+        viewer.resetView();
+      }
+    },
     onFacadeColor: (hex) => model.setMaterialColor('facade', hex),
     onSlotMaterial: (slot, index) => model.setSlotMaterial(slot, index),
     onReset: () => viewer.resetView(),

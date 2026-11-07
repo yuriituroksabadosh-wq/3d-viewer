@@ -9,7 +9,10 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 // БАЗИС ріже кожну деталь на кілька сіток (пласть, крайки, матеріали окремо),
 // тому «деталь» тут — найближчий іменований вузол, а не окрема сітка.
 
-const EXPLODE_FACTOR = 0.5;
+// Розбирання дворівневе: блоки розходяться між собою (GROUP), деталі — всередині блоку (INNER)
+const EXPLODE_FACTOR = 1;
+const EXPLODE_GROUP = 0.9;
+const EXPLODE_INNER = 1.1;
 const HIGHLIGHT = new THREE.Color(0x2f6fd6);
 
 // БАЗИС пише назву так: «Назва\rАртикул» (інколи ще дубль через табуляцію)
@@ -28,7 +31,7 @@ function isMeaningful(name) {
   return n !== ''
     && !/^\d+$/.test(n)
     && !/^\d+x\d+$/i.test(n)
-    && !/^(node|mesh)(_\d+)?$/i.test(n)
+    && !/^(node|mesh)([ _][0-9]+)?( instance)?$/i.test(n)
     && !/^(model|модель)$/i.test(n);
 }
 
@@ -78,10 +81,49 @@ function mergeWorld(list) {
 }
 
 // Кріплення й обробки всередині деталей — у режимі «як бачить клієнт» ховаються
-const TECHNICAL = /шкант|конфірмат|комформат|конфирмат|мініфікс|минификс|дюбель|отвір|отверстие|саморіз|саморез|шуруп|стяжк|полкотримач|ексцентрик|линия стыка|лінія стику/i;
+const TECHNICAL = /^(#[0-9]+ *)?(шкант|конфірмат|комформат|конфирмат|мініфікс|минификс|дюбель|отвір|отверстие|саморіз|саморез|шуруп|стяжк|полкотримач|ексцентрик|линия стыка|лінія стику)/i;
 
 const isFacadeName = (n) => n.startsWith('фасад') || n === 'двері';
 const isRoomName = (n) => n === 'стіна' || n === 'заміри';
+
+// ---- Кріплення, яких немає в .dae: шканти, конфірмати, мініфікси, дюбелі ----
+const FASTENER_TYPES = [
+  { re: /шкант/i, color: 0xd9b98a, metal: 0, d: 8, l: 30 },
+  { re: /конфірмат|конфирмат|комформат/i, color: 0x9aa0a6, metal: 0.8, d: 7, l: 50 },
+  { re: /мініфікс|минификс/i, color: 0xb7bcc2, metal: 0.8, d: 15, l: 13 },
+  { re: /дюбель/i, color: 0xe6e2da, metal: 0, d: 8, l: 30 },
+  { re: /саморіз|саморез|шуруп/i, color: 0x8d9298, metal: 0.8, d: 4, l: 16 },
+];
+
+function addFasteners(root, list) {
+  const cache = new Map();
+  const up = new THREE.Vector3(0, 1, 0);
+  for (const f of list) {
+    const type = FASTENER_TYPES.find((t) => t.re.test(f.name || ''));
+    if (!type || !Array.isArray(f.p) || !Array.isArray(f.az)) continue; // решта (ручки, ніжки) вже має геометрію
+    // Розмір з назви: «8х30 мм», «6,4х50 мм»
+    const m = /([0-9]+(?:[.,][0-9]+)?) *[хx×] *([0-9]+(?:[.,][0-9]+)?)/i.exec(f.name);
+    const d = m ? parseFloat(m[1].replace(',', '.')) : type.d;
+    const l = m ? parseFloat(m[2].replace(',', '.')) : type.l;
+    const key = `${type.color}|${d}|${l}`;
+    if (!cache.has(key)) {
+      cache.set(key, {
+        geo: new THREE.CylinderGeometry(d / 2, d / 2, l, 14),
+        mat: new THREE.MeshStandardMaterial({ color: type.color, metalness: type.metal, roughness: 0.5, name: f.name }),
+      });
+    }
+    const { geo, mat } = cache.get(key);
+    const axis = new THREE.Vector3(...f.az).normalize();
+    const node = new THREE.Object3D();
+    node.name = f.name;
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.quaternion.setFromUnitVectors(up, axis);
+    mesh.position.set(...f.p).addScaledVector(axis, l / 2); // від точки кріплення вздовж осі
+    node.add(mesh);
+    root.add(node);
+  }
+  root.updateMatrixWorld(true);
+}
 
 /** «ДСП лам. Kronospan 0101 PE Білий фасадний 18мм … 2800х2070х18 мм» → «ДСП лам. Kronospan 0101 PE Білий фасадний» */
 function shortMaterial(name) {
@@ -161,6 +203,10 @@ export async function loadGltfModel(buffer, title) {
   gltf.scene.updateMatrixWorld(true);
   // Параметри виробу з БАЗИСу (назва, префікс, артикул, замовлення), якщо конвертер їх додав
   const info = gltf.scene.userData?.m3 || gltf.userData?.m3 || null;
+  // Кріплення з БАЗИСу (скрипт «Експорт для 3D-перегляду»): у .dae їх немає, тому малюємо самі.
+  // Розмір беремо з назви («8х30», «6,4х50»), вісь — локальна Z кріплення, точка — його початок.
+  if (info && Array.isArray(info.fasteners)) addFasteners(gltf.scene, info.fasteners);
+
 
   // Сітки → деталі (поки що оригінальні сітки файлу)
   const byNode = new Map();
@@ -242,7 +288,42 @@ export async function loadGltfModel(buffer, title) {
   };
 
   // Розбирання: уся деталь зсувається від центру меблів (сітки вже у світових координатах)
-  for (const rec of meshes) rec.outward = rec.part.center.clone().sub(bounds.center);
+  // Центр кожного блоку (без стін) — щоб розводити блоки між собою, а деталі — від центру свого блоку
+  const groupCenter = new Map();
+  for (const p of parts) {
+    if (p.key === 'room') continue;
+    if (!groupCenter.has(p.group)) groupCenter.set(p.group, new THREE.Box3());
+    groupCenter.get(p.group).union(p.box);
+  }
+  for (const [grp, box] of groupCenter) groupCenter.set(grp, box.getCenter(new THREE.Vector3()));
+  const outwardOf = (part) => {
+    const gc = groupCenter.get(part.group) || bounds.center;
+    return gc.clone().sub(bounds.center).multiplyScalar(EXPLODE_GROUP)
+      .add(part.center.clone().sub(gc).multiplyScalar(EXPLODE_INNER));
+  };
+  // Дрібна фурнітура (тримачі, петлі, профілі) рухається разом із деталлю, на якій стоїть:
+  // шукаємо плиту, габарит якої (з запасом 25 мм) містить центр фурнітури, — найменшу з таких
+  // (у БАЗИСі фурнітура часто лежить окремими блоками верхнього рівня, тому шукаємо серед усіх плит)
+  // Ознака «плита» (ДСП, ХДФ, стільниця, стіни…) потрібна вже тут, тому рахуємо заздалегідь
+  for (const part of parts) {
+    const names = part.meshes.map((r) => [].concat(r.original).map((m) => m.name || '').join(' ')).join(' ');
+    part.board = part.key === 'room' || /дсп|хдф|мдф|двп|стільниц|столешн|крайка|kronospan|egger|swiss|скло|стекло|стіна|підлога/i.test(names);
+  }
+  const boards = parts.filter((p) => p.board && p.key !== 'room');
+  for (const p of parts) {
+    if (p.board || p.key === 'room') continue;
+    let host = null;
+    let best = Infinity;
+    for (const b of boards) {
+      if (!b.box.clone().expandByScalar(25).containsPoint(p.center)) continue;
+      const vol = b.size.x * b.size.y * b.size.z;
+      if (vol < best) { best = vol; host = b; }
+    }
+    // Велика окрема річ (техніка, раковина, ніжки) лишається сама по собі
+    const big = Math.max(p.size.x, p.size.y, p.size.z) > 250;
+    p.host = big ? null : host;
+  }
+  for (const rec of meshes) rec.outward = outwardOf(rec.part.host || rec.part);
 
   // Матеріали з assimp інколи приходять «металевими» — для меблів це зайве
   for (const rec of meshes) {
@@ -255,7 +336,7 @@ export async function loadGltfModel(buffer, title) {
   const openers = findOpeners(parts);
   for (const op of openers) {
     // Усе, що рухається разом із фасадом, і розбирається разом з ним
-    const shared = op.facade.center.clone().sub(bounds.center);
+    const shared = outwardOf(op.facade);
     op.box = new THREE.Box3();
     for (const p of op.parts) op.box.union(p.box);
     for (const p of op.parts) for (const rec of p.meshes) { rec.outward = shared; rec.opener = op; }
@@ -407,22 +488,22 @@ export async function loadGltfModel(buffer, title) {
   for (const part of parts) {
     if (part.key === 'room' || !part.board) { part.slot = null; continue; }
     const names = part.meshes.map((r) => matName(r.original)).join(' ');
-    part.slot = part.key === 'facade' ? 'facade' : /стільниц|столешн/i.test(names) ? 'top' : 'corpus';
+    part.slot = part.key === 'facade' ? 'facade' : /хдф|двп/i.test(names) || /^(зс|задня)/i.test(part.name.title) ? 'back' : /стільниц|столешн/i.test(names) ? 'top' : 'corpus';
   }
   for (const rec of meshes) {
     const n = matName(rec.original);
-    rec.swappable = /дсп|мдф|стільниц|столешн|крайка|kronospan|egger|swiss|cleaf|agt|шпон|акрил|пластик hpl/i.test(n) && !/скло|стекло/i.test(n);
+    rec.swappable = /дсп|мдф|хдф|двп|стільниц|столешн|крайка|kronospan|egger|swiss|cleaf|agt|шпон|акрил|пластик hpl/i.test(n) && !/скло|стекло/i.test(n);
   }
   // Варіанти: різні плитні матеріали моделі (без крайок, ХДФ, стін і скла)
   const options = [];
   const seen = new Set();
   for (const rec of meshes) {
     const n = matName(rec.original);
-    if (!rec.swappable || /крайка|хдф/i.test(n) || seen.has(n) || rec.part.key === 'room') continue;
+    if (!rec.swappable || /крайка/i.test(n) || seen.has(n) || rec.part.key === 'room') continue;
     seen.add(n);
     options.push({ name: n, short: shortMaterial(n), material: rec.original, swatch: swatchOf(rec.original) });
   }
-  const SLOT_LABELS = { facade: 'Фасади', corpus: 'Корпус', top: 'Стільниця' };
+  const SLOT_LABELS = { facade: 'Фасади', corpus: 'Корпус', back: 'Задня стінка', top: 'Стільниця' };
   // Для кожної групи — який матеріал стоїть у проєкті (найчастіший серед її плит, без крайок)
   const slots = Object.keys(SLOT_LABELS)
     .filter((id) => parts.some((p) => p.slot === id))
@@ -559,6 +640,17 @@ export async function loadGltfModel(buffer, title) {
     get viewMode() { return mode; },
     get hasHidden() { return hiddenParts.size > 0 || !!isolated; },
     setExplode(t) { explodeTarget = Math.min(1, Math.max(0, t)); },
+    /** Габарит меблів у повністю розібраному стані — щоб камера відійшла й усе влізло. */
+    explodedBox() {
+      const b = new THREE.Box3();
+      for (const rec of meshes) {
+        if (rec.part.key === 'room' || !rec.mesh.visible || rec.part.host) continue;
+        if (!rec.part.board && Math.max(rec.part.size.x, rec.part.size.y, rec.part.size.z) < 120) continue;
+        const pb = (rec.opener ? rec.opener.box : rec.part.box).clone().translate(rec.outward.clone().multiplyScalar(EXPLODE_FACTOR));
+        b.union(pb);
+      }
+      return b;
+    },
     setOpen(t) { openTarget = Math.min(1, Math.max(0, t)); },
     openers: { doors: openers.filter((o) => o.kind === 'door').length, drawers: openers.filter((o) => o.kind === 'drawer').length },
     setMaterialColor,
