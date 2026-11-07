@@ -45,7 +45,11 @@ export function createViewer(canvas) {
   const controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
-  controls.enablePan = false;               // для одного виробу панорамування не потрібне
+  // Зсув: двома пальцями (разом із наближенням), на ПК — правою кнопкою миші; паралельно екрану
+  controls.enablePan = true;
+  controls.screenSpacePanning = true;
+  controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+  controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
   controls.minPolarAngle = 0.2;             // не дає піти на саму гору
   controls.maxPolarAngle = Math.PI / 2 - 0.05; // камера не опускається під підлогу
 
