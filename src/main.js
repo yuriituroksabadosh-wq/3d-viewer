@@ -3,7 +3,7 @@ import { buildFurniture, makeBoundsBox, dimensionAnchors, validateModel } from '
 import { loadGltfModel } from './gltf-model.js';
 import { createPanel, createInfoBox, createLabels, toast } from './ui.js';
 import { createViewCube } from './viewcube.js';
-import { initTelegram } from './telegram.js';
+import { initTelegram, startParam } from './telegram.js';
 import { ICONS } from './icons.js';
 import { createMenu, showPartsList, createRuler, showHelp } from './extras.js';
 import { prepareKp } from './kp.js';
@@ -23,7 +23,9 @@ const $ = (id) => document.getElementById(id);
 
 /** Назва моделі з адреси ?model=... Лише латиниця, цифри й дефіс (щоб не було ../). */
 function getModelName() {
-  const raw = new URLSearchParams(window.location.search).get('model') || DEFAULT_MODEL;
+  // Пряме посилання з Telegram (?startapp=<назва>__<ключ>) має перевагу над ?model=
+  const sp = startParam();
+  const raw = (sp && sp.model) || new URLSearchParams(window.location.search).get('model') || DEFAULT_MODEL;
   return /^[a-zA-Z0-9-]{1,64}$/.test(raw) ? raw : null;
 }
 

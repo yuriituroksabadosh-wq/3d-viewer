@@ -39,3 +39,15 @@ function applyTheme(p = {}) {
     if (p[key]) style.setProperty(cssVar, p[key]);
   }
 }
+
+/**
+ * Параметр прямого посилання на міні-застосунок: t.me/<бот>/<застосунок>?startapp=<назва>__<ключ КП>.
+ * Telegram передає його в initDataUnsafe.start_param (і в адресі як tgWebAppStartParam).
+ * Повертає { model, kp } або null.
+ */
+export function startParam() {
+  const tg = window.Telegram?.WebApp;
+  const raw = tg?.initDataUnsafe?.start_param || new URLSearchParams(window.location.search).get('tgWebAppStartParam') || '';
+  const m = /^([a-zA-Z0-9-]{1,64})(?:__([A-Za-z0-9_-]{43}))?$/.exec(raw);
+  return m ? { model: m[1], kp: m[2] || null } : null;
+}

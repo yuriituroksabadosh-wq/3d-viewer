@@ -2,9 +2,13 @@
 // Без ключа файл не розшифрувати; ключ на сервер не потрапляє.
 
 import { openSheet } from './extras.js';
+import { startParam } from './telegram.js';
 
 /** Ключ з адреси: …#kp=<ключ> або …?kp=<ключ> */
 export function kpKey() {
+  // 0) пряме посилання Telegram: ?startapp=<назва>__<ключ>
+  const sp = startParam();
+  if (sp && sp.kp) return sp.kp;
   // 1) після # (звичайне посилання); 2) параметр ?kp= — для кнопки в Telegram-боті,
   //    бо Telegram дописує свої дані після # і може затерти ключ
   const m = /(?:^|[#&])kp=([A-Za-z0-9_-]{43})/.exec(window.location.hash);
