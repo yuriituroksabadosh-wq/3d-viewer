@@ -250,28 +250,57 @@ export async function loadGltfModel(buffer, title) {
   for (const op of openers) {
     // Усе, що рухається разом із фасадом, і розбирається разом з ним
     const shared = op.facade.center.clone().sub(bounds.center);
+    op.box = new THREE.Box3();
+    for (const p of op.parts) op.box.union(p.box);
     for (const p of op.parts) for (const rec of p.meshes) { rec.outward = shared; rec.opener = op; }
   }
 
-  let explodeTarget = 0;
-  let explodeNow = 0;
-  let openTarget = 0;
-  let openNow = 0;
-  const Y = new THREE.Vector3(0, 1, 0);
-  const step = (now, target) => {
-    const v = now + (target - now) * 0.1;
-    return Math.abs(target - v) < 0.001 ? target : v;
-  };
+  // Розбирання не опускає деталі нижче найнижчої точки меблів (інакше вони «провалюються» в підлогу)
+  for (const rec of meshes) {
+    const box = rec.opener ? rec.opener.box : rec.part.box;
+    const lowest = (bounds.min.y - box.min.y) / EXPLODE_FACTOR; // на скільки максимум можна вниз
+    if (rec.outward.y < lowest) rec.outward = rec.outward.clone().setY(Math.min(0, lowest));
+  }
 
-  function update() {
-    if (explodeNow === explodeTarget && openNow === openTarget) return;
-    explodeNow = step(explodeNow, explodeTarget);
-    openNow = step(openNow, openTarget);
-    const ease = openNow * openNow * (3 - 2 * openNow); // плавний старт і зупинка
+  // Тривалість анімацій у секундах (залежить від часу, а не від частоти кадрів)
+  const OPEN_TIME = 1.3;      // одні двері чи шухляда
+  const OPEN_STAGGER = 0.7;   // наступні стартують, коли попередні майже відкрились: по черзі, а не всі разом
+  const EXPLODE_TIME = 1.0;   // одна деталь
+  const EXPLODE_SPREAD = 1.6; // за цей час «хвиля» розбирання проходить згори донизу
+  // Порядок відкривання: зліва направо, згори вниз
+  openers.sort((a, b) => (a.facade.center.x - b.facade.center.x) || (b.facade.center.y - a.facade.center.y));
+  openers.forEach((op, i) => { op.delay = i * OPEN_STAGGER; });
+  const OPEN_TOTAL = OPEN_TIME + Math.max(0, openers.length - 1) * OPEN_STAGGER;
+
+  // Розбирання хвилею: згори вниз; деталі, що відкриваються разом з фасадом, рухаються з ним
+  const ys = parts.filter((p) => p.key !== 'room').map((p) => p.center.y);
+  const topY = Math.max(...ys);
+  const bottomY = Math.min(...ys);
+  for (const p of parts) p.explodeDelay = topY > bottomY ? ((topY - p.center.y) / (topY - bottomY)) * EXPLODE_SPREAD : 0;
+  for (const op of openers) for (const p of op.parts) p.explodeDelay = op.facade.explodeDelay;
+  const EXPLODE_TOTAL = EXPLODE_TIME + EXPLODE_SPREAD;
+
+  let explodeTarget = 0;
+  let explodeNow = 0; // 0 … EXPLODE_TOTAL
+  let openTarget = 0;
+  let openClock = 0; // 0 … OPEN_TOTAL
+  const Y = new THREE.Vector3(0, 1, 0);
+  const smooth = (t) => t * t * t * (t * (t * 6 - 15) + 10); // м'який старт і м'яка зупинка
+  const towards = (now, target, delta) => (now < target ? Math.min(target, now + delta) : Math.max(target, now - delta));
+
+  function update(dt = 1 / 60) {
+    const openGoal = openTarget * OPEN_TOTAL;
+    const explodeGoal = explodeTarget * EXPLODE_TOTAL;
+    if (explodeNow === explodeGoal && openClock === openGoal) return;
+    explodeNow = towards(explodeNow, explodeGoal, dt);
+    openClock = towards(openClock, openGoal, dt);
     for (const rec of meshes) {
       if (rec.part.key === 'room') continue; // стіни не рухаємо
-      const e = rec.outward.clone().multiplyScalar(EXPLODE_FACTOR * explodeNow);
+      const ex = smooth(Math.min(1, Math.max(0, (explodeNow - rec.part.explodeDelay) / EXPLODE_TIME)));
+      const e = rec.outward.clone().multiplyScalar(EXPLODE_FACTOR * ex);
       const op = rec.opener;
+      // При закриванні порядок зворотний: останні відкриті зачиняються першими
+      const ease = op ? smooth(Math.min(1, Math.max(0, (openClock - op.delay) / OPEN_TIME))) : 0;
       if (op && op.kind === 'door') {
         // Поворот навколо вертикальної осі петель: позиція = pivot + e − R·pivot
         const angle = op.sign * op.maxAngle * ease;

@@ -19,14 +19,33 @@ const FACADE_COLORS = [
 const DEFAULT_MODEL = 'sample-cabinet';
 const $ = (id) => document.getElementById(id);
 
-// Іконки панелі інструментів (свої, прості контури 24×24)
+// Іконки панелі інструментів: двоколірні, 32×32; акцент — фірмове золото (змінна --icon-accent)
 const ICONS = {
-  scan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M7 12h10"/></svg>',
-  block: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>',
-  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>',
-  stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
-  hide: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.7 10.7 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17.4 17.4 0 0 0 2.5 12S6 19 12 19a9.7 9.7 0 0 0 4.3-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
-  show: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z"/><circle cx="12" cy="12" r="3"/></svg>',
+  scan: `<svg viewBox="0 0 32 32" aria-hidden="true">
+    <path d="M4 10V6.5A2.5 2.5 0 0 1 6.5 4H10M22 4h3.5A2.5 2.5 0 0 1 28 6.5V10M28 22v3.5a2.5 2.5 0 0 1-2.5 2.5H22M10 28H6.5A2.5 2.5 0 0 1 4 25.5V22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+    <g fill="var(--icon-accent)"><rect x="9" y="9" width="6" height="6" rx="1.2"/><rect x="17" y="9" width="6" height="6" rx="1.2"/><rect x="9" y="17" width="6" height="6" rx="1.2"/><rect x="17.5" y="17.5" width="2.6" height="2.6" rx=".5"/><rect x="20.4" y="20.4" width="2.6" height="2.6" rx=".5"/></g>
+    <path d="M6 16h20" stroke="#d9480f" stroke-width="1.6" stroke-linecap="round"/></svg>`,
+  block: `<svg viewBox="0 0 32 32" aria-hidden="true">
+    <path d="M16 15 27 9.5v13L16 28z" fill="var(--icon-accent)" fill-opacity=".75"/>
+    <path d="M16 15 5 9.5v13L16 28z" fill="var(--icon-accent)" fill-opacity=".3"/>
+    <path d="M16 4 27 9.5v13L16 28 5 22.5v-13z M5 9.5 16 15l11-5.5M16 15v13" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`,
+  open: `<svg viewBox="0 0 32 32" aria-hidden="true">
+    <rect x="5" y="4" width="14" height="24" rx="1.5" fill="var(--icon-accent)" fill-opacity=".18" stroke="currentColor" stroke-width="2"/>
+    <path d="M8 12h8M8 19h8" stroke="currentColor" stroke-width="1.6" opacity=".45" stroke-linecap="round"/>
+    <path d="M19 4l8.5 3.2v18.6L19 28z" fill="var(--icon-accent)" fill-opacity=".7" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M23.5 14.5v3.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>`,
+  close: `<svg viewBox="0 0 32 32" aria-hidden="true">
+    <rect x="5" y="4" width="22" height="24" rx="1.5" fill="var(--icon-accent)" fill-opacity=".55" stroke="currentColor" stroke-width="2"/>
+    <path d="M16 4v24" stroke="currentColor" stroke-width="2"/>
+    <path d="M13 14v4M19 14v4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>`,
+  hide: `<svg viewBox="0 0 32 32" aria-hidden="true">
+    <path d="M3.5 16S8.5 7 16 7s12.5 9 12.5 9-5 9-12.5 9S3.5 16 3.5 16z" fill="var(--icon-accent)" fill-opacity=".25" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="16" cy="16" r="4.5" fill="none" stroke="currentColor" stroke-width="2"/>
+    <path d="M6 26 26 6" stroke="#d9480f" stroke-width="2.6" stroke-linecap="round"/></svg>`,
+  show: `<svg viewBox="0 0 32 32" aria-hidden="true">
+    <path d="M3.5 16S8.5 7 16 7s12.5 9 12.5 9-5 9-12.5 9S3.5 16 3.5 16z" fill="var(--icon-accent)" fill-opacity=".25" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="16" cy="16" r="4.5" fill="var(--icon-accent)" stroke="currentColor" stroke-width="2"/>
+    <circle cx="17.5" cy="14.5" r="1.2" fill="#fff"/></svg>`,
 };
 
 /** Назва моделі з адреси ?model=... Лише латиниця, цифри й дефіс (щоб не було ../). */
@@ -213,13 +232,13 @@ async function main() {
   const toolbar = $('toolbar');
   const tools = {};
   let openOn = false;
-  function tool(id, title, icon, onClick) {
+  function tool(id, title, icon, onClick, caption) {
     const b = document.createElement('button');
     b.className = 'tool';
     b.type = 'button';
     b.title = title;
     b.setAttribute('aria-label', title);
-    b.innerHTML = icon;
+    b.innerHTML = icon + `<span class="tool-cap">${caption}</span>`;
     b.addEventListener('click', onClick);
     toolbar.append(b);
     tools[id] = b;
@@ -230,10 +249,10 @@ async function main() {
     if (!isGlbModel) return;
     tools.block.setAttribute('aria-pressed', String(blockMode));
     tools.play.setAttribute('aria-pressed', String(openOn));
-    tools.play.innerHTML = openOn ? ICONS.stop : ICONS.play;
+    tools.play.innerHTML = (openOn ? ICONS.close : ICONS.open) + `<span class="tool-cap">${openOn ? 'Закрити' : 'Відкрити'}</span>`;
     tools.play.title = openOn ? 'Закрити двері й шухляди' : 'Відкрити двері й шухляди';
     const canShow = !current && model.hasHidden;
-    tools.hide.innerHTML = canShow ? ICONS.show : ICONS.hide;
+    tools.hide.innerHTML = (canShow ? ICONS.show : ICONS.hide) + `<span class="tool-cap">${canShow ? 'Показати' : 'Сховати'}</span>`;
     tools.hide.title = canShow ? 'Показати все' : 'Сховати виділене';
     tools.hide.disabled = !current && !model.hasHidden;
   }
@@ -241,19 +260,19 @@ async function main() {
   if (isGlbModel) {
     toolbar.hidden = false;
 
-    tool('scan', 'Сканувати QR-код деталі', ICONS.scan, () => scanPart());
+    tool('scan', 'Сканувати QR-код деталі', ICONS.scan, () => scanPart(), 'Сканувати');
     tool('block', 'Вибір цілим блоком', ICONS.block, () => {
       blockMode = !blockMode;
       if (current) selectPart(current); else refreshTools();
       toast($('toast'), blockMode ? 'Вибір блоком: натисніть на будь-яку деталь блоку' : 'Вибір окремої деталі');
-    });
-    tool('play', 'Відкрити двері й шухляди', ICONS.play, () => {
+    }, 'Блок');
+    tool('play', 'Відкрити двері й шухляди', ICONS.open, () => {
       const { doors, drawers } = model.openers;
       if (!doors && !drawers) { toast($('toast'), 'У моделі не знайдено дверей на петлях чи шухляд'); return; }
       openOn = !openOn;
       model.setOpen(openOn ? 1 : 0);
       refreshTools();
-    });
+    }, 'Відкрити');
     tool('hide', 'Сховати виділене', ICONS.hide, () => {
       if (current) {
         model.hide(selectedParts());
@@ -263,7 +282,7 @@ async function main() {
       } else if (model.hasHidden) {
         showAll();
       }
-    });
+    }, 'Сховати');
     refreshTools();
   }
 
@@ -375,7 +394,7 @@ async function main() {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
     viewer.tick(dt);
-    model.update();
+    model.update(dt);
     viewer.controls.update();
     viewer.renderer.render(viewer.scene, viewer.camera);
     cube.render();

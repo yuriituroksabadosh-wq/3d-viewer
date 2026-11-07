@@ -84,12 +84,15 @@ export function buildFurniture(data) {
   let explodeTarget = 0;
   let explodeNow = 0;
 
-  function update() {
+  // Розбирання триває ~1,6 с незалежно від частоти кадрів, з м'яким стартом і зупинкою
+  function update(dt = 1 / 60) {
     if (explodeNow === explodeTarget) return;
-    explodeNow += (explodeTarget - explodeNow) * 0.12;
-    if (Math.abs(explodeTarget - explodeNow) < 0.001) explodeNow = explodeTarget;
+    const delta = dt / 1.6;
+    explodeNow = explodeNow < explodeTarget ? Math.min(explodeTarget, explodeNow + delta) : Math.max(explodeTarget, explodeNow - delta);
+    const t = explodeNow;
+    const k = t * t * t * (t * (t * 6 - 15) + 10);
     for (const part of parts) {
-      part.mesh.position.copy(part.home).addScaledVector(part.outward, EXPLODE_FACTOR * explodeNow);
+      part.mesh.position.copy(part.home).addScaledVector(part.outward, EXPLODE_FACTOR * k);
     }
   }
 
