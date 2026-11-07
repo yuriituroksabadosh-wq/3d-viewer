@@ -11,8 +11,9 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 
 // Розбирання дворівневе: блоки розходяться між собою (GROUP), деталі — всередині блоку (INNER)
 const EXPLODE_FACTOR = 1;
-const EXPLODE_GROUP = 0.9;
-const EXPLODE_INNER = 1.1;
+const EXPLODE_GROUP = 1.4;  // блоки між собою (лише по X)
+const EXPLODE_INNER = 0.5; // деталі всередині блоку: частка відстані до центру блоку
+const EXPLODE_GAP = 110;     // мінімальний відступ кожної плити, мм
 const HIGHLIGHT = new THREE.Color(0x2f6fd6);
 
 // БАЗИС пише назву так: «Назва\rАртикул» (інколи ще дубль через табуляцію)
@@ -95,10 +96,71 @@ const FASTENER_TYPES = [
   { re: /саморіз|саморез|шуруп/i, color: 0x8d9298, metal: 0.8, d: 4, l: 16 },
 ];
 
+// Мініфікс (Hettich Rastex + болт Twister): у БАЗИСі є лише болт; ексцентрик домальовуємо самі.
+// Перевірено на моделі: точка болта лежить у плиті, в торець якої він входить; болт іде вздовж −X на ~34 мм.
+const MINIFIX_RE = /twister|rastex/i;
+
+function boardBoxes(root) {
+  const out = [];
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const names = [].concat(o.material).map((m) => (m && m.name) || '').join(' ');
+    if (!/дсп|хдф|мдф|двп|стільниц|столешн|крайка|kronospan|egger|swiss|cleaf/i.test(names)) return;
+    out.push(new THREE.Box3().setFromObject(o));
+  });
+  return out;
+}
+
+function addMinifix(root, f, boxes, cache) {
+  const axis = new THREE.Vector3(...f.ax).negate().normalize(); // болт: від точки вздовж −X
+  const p = new THREE.Vector3(...f.p);
+  const up = new THREE.Vector3(0, 1, 0);
+  const main = [Math.abs(axis.x), Math.abs(axis.y), Math.abs(axis.z)];
+  const boltIdx = main.indexOf(Math.max(...main));
+  // Плита з ексцентриком: містить точку, і її товщина — не вздовж болта
+  let camAxis = null;
+  for (const b of boxes) {
+    if (!b.clone().expandByScalar(0.5).containsPoint(p)) continue;
+    const s = b.getSize(new THREE.Vector3());
+    const thinIdx = s.x <= s.y && s.x <= s.z ? 0 : s.y <= s.z ? 1 : 2;
+    if (thinIdx === boltIdx) continue;
+    camAxis = new THREE.Vector3(thinIdx === 0 ? 1 : 0, thinIdx === 1 ? 1 : 0, thinIdx === 2 ? 1 : 0);
+    break;
+  }
+  if (!cache.boltGeo) {
+    cache.boltGeo = new THREE.CylinderGeometry(3, 3, 34, 12);
+    cache.camGeo = new THREE.CylinderGeometry(7.5, 7.5, 12, 24);
+    cache.metal = new THREE.MeshStandardMaterial({ color: 0xb7bcc2, metalness: 0.8, roughness: 0.4, name: 'Мініфікс' });
+  }
+  const bolt = new THREE.Object3D();
+  bolt.name = f.name;
+  const bm = new THREE.Mesh(cache.boltGeo, cache.metal);
+  bm.quaternion.setFromUnitVectors(up, axis);
+  bm.position.copy(p).addScaledVector(axis, 17);
+  bolt.add(bm);
+  root.add(bolt);
+  if (camAxis) {
+    const cam = new THREE.Object3D();
+    cam.name = 'Мініфікс Rastex 15 (ексцентрик)';
+    const cm = new THREE.Mesh(cache.camGeo, cache.metal);
+    cm.quaternion.setFromUnitVectors(up, camAxis);
+    cm.position.copy(p);
+    cam.add(cm);
+    root.add(cam);
+  }
+}
+
 function addFasteners(root, list) {
   const cache = new Map();
+  const mfCache = {};
+  let boxes = null;
   const up = new THREE.Vector3(0, 1, 0);
   for (const f of list) {
+    if (MINIFIX_RE.test(f.name || '') && Array.isArray(f.p) && Array.isArray(f.ax)) {
+      boxes = boxes || boardBoxes(root);
+      addMinifix(root, f, boxes, mfCache);
+      continue;
+    }
     const type = FASTENER_TYPES.find((t) => t.re.test(f.name || ''));
     if (!type || !Array.isArray(f.p) || !Array.isArray(f.ax)) continue; // решта (ручки, ніжки) вже має геометрію
     // Розмір з назви: «8х30 мм», «6,4х50 мм»
@@ -160,24 +222,63 @@ function findOpeners(parts) {
   const inside = (c, b, pad) => c.x > b.min.x - pad && c.x < b.max.x + pad && c.y > b.min.y - pad && c.y < b.max.y + pad;
   const openers = [];
 
-  for (const f of parts.filter((p) => p.key === 'facade')) {
+  // Кожна петля належить лише одному фасаду — найближчому до неї (петля біля стику двох фасадів
+  // інакше «чіплялась» би до обох). Відстань — від центру петлі до габариту фасаду.
+  const facadesList = parts.filter((p) => p.key === 'facade');
+  const hingeOwner = new Map();
+  for (const hg of hinges) {
+    let best = null;
+    let bestD = Infinity;
+    for (const f of facadesList) {
+      const d = f.box.distanceToPoint(hg.center);
+      if (d < bestD) { bestD = d; best = f; }
+    }
+    if (best && bestD < 160) hingeOwner.set(hg, best);
+  }
+
+  for (const f of facadesList) {
     const b = f.box;
     // Петлі: у межах фасаду по X/Y, по глибині — трохи за фасадом
-    const near = hinges.filter((h) => !used.has(h) && inside(h.center, b, 40) && h.center.z > b.min.z - 150 && h.center.z < b.max.z + 20);
+    const near = hinges.filter((h) => !used.has(h) && hingeOwner.get(h) === f);
     // Ручки: на фасаді, спереду
     const hs = handles.filter((h) => !used.has(h) && inside(h.center, b, 10) && h.center.z > b.max.z - 20 && h.center.z < b.max.z + 80);
 
     if (near.length) {
+      // Де стоять петлі — та сторона й є віссю повороту:
+      //  збоку (ліворуч/праворуч) — звичайні двері, вісь вертикальна;
+      //  внизу — відкидна дверка (вниз на себе), вгорі — підйомна (вгору), вісь горизонтальна
       const avgX = near.reduce((s, h) => s + h.center.x, 0) / near.length;
-      const left = avgX < f.center.x;
-      openers.push({
-        kind: 'door',
-        facade: f,
-        parts: [f, ...near, ...hs],
-        pivot: new THREE.Vector3(left ? b.min.x : b.max.x, 0, b.min.z),
-        sign: left ? -1 : 1, // лівий край — вільний правий край іде на нас (−кут), і навпаки
-        maxAngle: THREE.MathUtils.degToRad(95),
-      });
+      const avgY = near.reduce((s, h) => s + h.center.y, 0) / near.length;
+      const xs = near.map((h) => h.center.x);
+      const ys = near.map((h) => h.center.y);
+      const spreadX = Math.max(...xs) - Math.min(...xs);
+      const spreadY = Math.max(...ys) - Math.min(...ys);
+      // Відстань від петель до найближчого краю — у частках розміру фасаду
+      const toSide = Math.min(avgX - b.min.x, b.max.x - avgX) / Math.max(1, f.size.x);
+      const toEdgeY = Math.min(avgY - b.min.y, b.max.y - avgY) / Math.max(1, f.size.y);
+      const horizontal = near.length > 1 ? spreadX > spreadY : toEdgeY < toSide;
+      let op;
+      if (horizontal) {
+        const bottom = avgY < f.center.y;
+        op = {
+          kind: 'door',
+          axis: new THREE.Vector3(1, 0, 0),
+          pivot: new THREE.Vector3(0, bottom ? b.min.y : b.max.y, b.min.z),
+          // нижній край — верх іде на нас і вниз (+кут), верхній край — низ іде на нас і вгору (−кут)
+          sign: bottom ? 1 : -1,
+          maxAngle: THREE.MathUtils.degToRad(bottom ? 88 : 95),
+        };
+      } else {
+        const left = avgX < f.center.x;
+        op = {
+          kind: 'door',
+          axis: new THREE.Vector3(0, 1, 0),
+          pivot: new THREE.Vector3(left ? b.min.x : b.max.x, 0, b.min.z),
+          sign: left ? -1 : 1, // лівий край — вільний правий край іде на нас (−кут), і навпаки
+          maxAngle: THREE.MathUtils.degToRad(95),
+        };
+      }
+      openers.push({ ...op, facade: f, parts: [f, ...near, ...hs] });
       near.concat(hs).forEach((p) => used.add(p));
       continue;
     }
@@ -297,10 +398,26 @@ export async function loadGltfModel(buffer, title) {
     groupCenter.get(p.group).union(p.box);
   }
   for (const [grp, box] of groupCenter) groupCenter.set(grp, box.getCenter(new THREE.Vector3()));
+  // Розбирання як монтажна схема:
+  //  - блоки (тумба, пенал, техніка) розходяться між собою лише в боки (по X);
+  //  - кожна плита рухається вздовж своєї товщини назовні від центру свого блоку
+  //    (боковини — вліво/вправо, кришка/дно — вгору/вниз, задня стінка — назад, полиці — по висоті);
+  //  - решта (техніка, раковина) — від центру блоку.
+  const AX = ['x', 'y', 'z'];
   const outwardOf = (part) => {
     const gc = groupCenter.get(part.group) || bounds.center;
-    return gc.clone().sub(bounds.center).multiplyScalar(EXPLODE_GROUP)
-      .add(part.center.clone().sub(gc).multiplyScalar(EXPLODE_INNER));
+    const off = new THREE.Vector3((gc.x - bounds.center.x) * EXPLODE_GROUP, 0, 0);
+    if (part.board && part.key !== 'room') {
+      const sz = part.size;
+      const i = sz.x <= sz.y && sz.x <= sz.z ? 0 : sz.y <= sz.z ? 1 : 2; // вісь товщини
+      const k = AX[i];
+      const d = part.center[k] - gc[k];
+      const sign = Math.abs(d) > 1 ? Math.sign(d) : (k === 'z' ? 1 : -1);
+      off[k] += sign * (EXPLODE_GAP + Math.abs(d) * EXPLODE_INNER);
+    } else {
+      off.add(part.center.clone().sub(gc).multiplyScalar(EXPLODE_INNER));
+    }
+    return off;
   };
   // Дрібна фурнітура (тримачі, петлі, профілі) рухається разом із деталлю, на якій стоїть:
   // шукаємо плиту, габарит якої (з запасом 25 мм) містить центр фурнітури, — найменшу з таких
@@ -337,7 +454,8 @@ export async function loadGltfModel(buffer, title) {
   const openers = findOpeners(parts);
   for (const op of openers) {
     // Усе, що рухається разом із фасадом, і розбирається разом з ним
-    const shared = outwardOf(op.facade);
+    // Шухляда чи двері рухаються цілими: зсув фасаду + додатково вперед, щоб ящик повністю вийшов із корпусу
+    const shared = outwardOf(op.facade).add(new THREE.Vector3(0, 0, op.kind === 'drawer' ? op.slide : 120));
     op.box = new THREE.Box3();
     for (const p of op.parts) op.box.union(p.box);
     for (const p of op.parts) for (const rec of p.meshes) { rec.outward = shared; rec.opener = op; }
@@ -390,10 +508,10 @@ export async function loadGltfModel(buffer, title) {
       // При закриванні порядок зворотний: останні відкриті зачиняються першими
       const ease = op ? smooth(Math.min(1, Math.max(0, (openClock - op.delay) / OPEN_TIME))) : 0;
       if (op && op.kind === 'door') {
-        // Поворот навколо вертикальної осі петель: позиція = pivot + e − R·pivot
+        // Поворот навколо осі петель (вертикальної чи горизонтальної): позиція = pivot + e − R·pivot
         const angle = op.sign * op.maxAngle * ease;
-        rec.mesh.rotation.y = angle;
-        rec.mesh.position.copy(op.pivot).add(e).sub(op.pivot.clone().applyAxisAngle(Y, angle));
+        rec.mesh.quaternion.setFromAxisAngle(op.axis, angle);
+        rec.mesh.position.copy(op.pivot).add(e).sub(op.pivot.clone().applyAxisAngle(op.axis, angle));
       } else if (op && op.kind === 'drawer') {
         rec.mesh.position.copy(rec.home).add(e).add(new THREE.Vector3(0, 0, op.slide * ease));
       } else {

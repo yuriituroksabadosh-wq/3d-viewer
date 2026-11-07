@@ -319,7 +319,8 @@ async function main() {
         // Стіни заважають бачити розібрані деталі — ховаємо, а камера відходить, щоб влізло все
         roomBeforeExplode = model.hasRoom && roomShown;
         if (roomBeforeExplode) { model.setKeyVisible('room', false); panel.setRoom(false); }
-        viewer.focusBox(model.explodedBox());
+        // Схему розбирання найкраще видно спереду трохи згори й зліва
+        viewer.focusBox(model.explodedBox(), [-0.2, 0.55, 1]);
       } else {
         if (roomBeforeExplode) { model.setKeyVisible('room', true); panel.setRoom(true); roomBeforeExplode = false; }
         viewer.resetView();

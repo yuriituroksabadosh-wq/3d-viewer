@@ -143,16 +143,17 @@ export function createViewer(canvas) {
   }
 
   /** Наблизити до набору деталей: центр — їхній габарит, відстань — щоб влізли, напрям — поточний. */
-  function focusBox(box) {
+  function focusBox(box, viewDir) {
     if (box.isEmpty()) return;
     const c = box.getCenter(new THREE.Vector3());
     const r = box.getSize(new THREE.Vector3()).length() / 2;
     const fov = THREE.MathUtils.degToRad(camera.fov);
     const fit = Math.max(1, 1 / camera.aspect);
     const d = Math.max(controls.minDistance, (r / Math.sin(fov / 2)) * 1.15 * fit);
-    const dir = camera.position.clone().sub(controls.target).normalize();
+    // Напрям: заданий (наприклад, спереду згори для розбирання) або поточний
+    const dir = viewDir ? new THREE.Vector3(...viewDir).normalize() : camera.position.clone().sub(controls.target).normalize();
     setSpin(false);
-    flyTo(c.clone().addScaledVector(dir, d), c);
+    flyTo(c.clone().addScaledVector(dir, d), c, viewDir ? 1.2 : 0.8);
   }
 
   function resetView(animate = true) {
