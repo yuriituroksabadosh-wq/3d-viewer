@@ -119,12 +119,22 @@ async function main() {
     $('loader-text').textContent = total ? `${mb(got)} / ${mb(total)} МБ` : `${mb(got)} МБ`;
   };
 
+  // Модель могли щойно надіслати, а сайт ще оновлюється (~1 хв): не показуємо помилку одразу,
+  // а чекаємо до 3 хв і пробуємо знову
   let model;
-  try {
-    model = await loadModel(name, onProgress);
-  } catch (err) {
-    console.error(err);
-    return showError(err.message || 'Не вдалося відкрити модель.');
+  for (let attempt = 0; ; attempt++) {
+    try {
+      model = await loadModel(name, onProgress);
+      break;
+    } catch (err) {
+      const notYet = /\(помилка 404\)|не знайдено/i.test(err.message || '');
+      if (!notYet || attempt >= 18) {
+        console.error(err);
+        return showError(err.message || 'Не вдалося відкрити модель.');
+      }
+      $('loader-text').textContent = 'Модель ще публікується, зачекайте хвилинку…';
+      await new Promise((r) => setTimeout(r, 10000));
+    }
   }
   const isGlbModel = model.kind === 'glb';
 

@@ -89,11 +89,42 @@ if (staged) {
   log('Файли не змінились — викладати нічого');
 }
 
-// ---- 5. Чекаємо, поки сайт віддасть САМЕ ЦІ файли (звіряємо вміст, а не розмір) ----
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+// ---- 5. Прев'ю — локально, одразу (не чекаючи GitHub): тимчасовий сервер Vite на цьому комп'ютері ----
+log('Роблю прев\'ю…');
+let shot = false;
+let devServer = null;
+try {
+  const { createServer } = await import('vite');
+  devServer = await createServer({ root: ROOT, logLevel: 'silent', server: { port: 5174, strictPort: false } });
+  await devServer.listen();
+  const local = devServer.resolvedUrls?.local?.[0] || 'http://localhost:5174/';
+  for (let i = 1; i <= 2 && !shot; i++) {
+    try {
+      node([path.join('tools', 'preview.mjs'), slug, local]);
+      shot = true;
+    } catch {
+      log(`Прев'ю: спроба ${i} не вдалась${i < 2 ? ', повторюю…' : ''}`);
+    }
+  }
+} catch (e) {
+  log('Локальний сервер для прев\'ю не стартував: ' + (e.message || e));
+} finally {
+  if (devServer) await devServer.close();
+}
+if (!shot) log('Прев\'ю не вийшло — картка піде без фото');
+
+// ---- 6. Картка в Telegram — одразу. Якщо замовник відкриє раніше, ніж оновиться сайт,
+//         перегляд покаже «Модель ще публікується…» і сам спробує ще раз ----
+log('Надсилаю картку в бот…');
+node([path.join('tools', 'send-tg.mjs'), slug]);
+log('Картку надіслано. Перешліть її замовнику (сайт оновиться приблизно за хвилину).');
+
+// ---- 7. Контроль: чекаємо, поки сайт віддасть САМЕ ЦІ файли (звіряємо вміст) ----
 const wanted = files.map((f) => ({ f, hash: sha(fs.readFileSync(path.join(ROOT, f))) }));
-log('Чекаю оновлення сайту (зазвичай 1–2 хв)…');
+log('Перевіряю оновлення сайту…');
 let ok = false;
 for (let i = 0; i < 60 && !ok; i++) {
   try {
@@ -103,26 +134,7 @@ for (let i = 0; i < 60 && !ok; i++) {
       if (!r.ok || sha(Buffer.from(await r.arrayBuffer())) !== hash) { ok = false; break; }
     }
   } catch { ok = false; /* мережа — пробуємо ще */ }
-  if (!ok) await sleep(10000);
+  if (!ok) await sleep(5000);
 }
-if (!ok) fail('Сайт не оновився за 10 хв. Перевірте інтернет і запустіть ще раз.');
-log('Сайт оновлено');
-
-// ---- 6. Прев'ю з живого сайту (до трьох спроб) ----
-log('Роблю прев\'ю…');
-let shot = false;
-for (let i = 1; i <= 3 && !shot; i++) {
-  try {
-    node([path.join('tools', 'preview.mjs'), slug, SITE]);
-    shot = true;
-  } catch {
-    log(`Прев'ю: спроба ${i} не вдалась${i < 3 ? ', повторюю…' : ''}`);
-    if (i < 3) await sleep(15000);
-  }
-}
-if (!shot) log('Прев\'ю не вийшло — картка піде без фото');
-
-// ---- 7. Картка в Telegram ----
-log('Надсилаю картку в бот…');
-node([path.join('tools', 'send-tg.mjs'), slug]);
-log(`Готово: ${slug}. Перешліть картку з бота замовнику.`);
+if (!ok) fail('Сайт не оновився за 5 хв. Перевірте інтернет і запустіть ще раз.');
+log(`Готово: ${slug}. Сайт оновлено.`);
