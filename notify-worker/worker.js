@@ -36,15 +36,18 @@ export default {
       return new Response('Bad request', { status: 400, headers: cors(origin) });
     }
 
-    // Свої відкриття (менеджер дивиться сам) — не повідомляємо
-    if (data.user && String(data.user.id) === String(env.CHAT_ID)) return new Response('ok', { headers: cors(origin) });
+    const log = (result) => console.log(JSON.stringify({ event: data.event, model, v: clean(data.v, 20), tg: !!data.telegram, uid: data.user && data.user.id, result }));
 
-    // Не частіше одного однакового сповіщення на 10 хв (від одного клієнта)
-    const who = request.headers.get('CF-Connecting-IP') || '';
+    // Свої відкриття (менеджер дивиться сам) — не повідомляємо
+    if (data.user && String(data.user.id) === String(env.CHAT_ID)) { log('own'); return new Response('own', { headers: cors(origin) }); }
+
+    // Повтори того самого (оновив сторінку) — не частіше разу на 2 хв від одного клієнта.
+    // Ключ — Telegram-користувач, а не IP: інакше вся сім'я на одному Wi-Fi «зливається» в одного.
+    const who = (data.user && data.user.id) || request.headers.get('CF-Connecting-IP') || '';
     const cache = caches.default;
     const key = new Request(`https://notify.local/${data.event}/${model}/${encodeURIComponent(who)}`);
-    if (await cache.match(key)) return new Response('ok', { headers: cors(origin) });
-    await cache.put(key, new Response('1', { headers: { 'Cache-Control': 'max-age=600' } }));
+    if (await cache.match(key)) { log('repeat'); return new Response('repeat', { headers: cors(origin) }); }
+    await cache.put(key, new Response('1', { headers: { 'Cache-Control': 'max-age=120' } }));
 
     // «Санвузол · №460» → «№460 · Санвузол»: спершу номер замовлення
     const parts = clean(data.title, 80).split(' · ').filter(Boolean);
@@ -68,6 +71,7 @@ export default {
       const plain = !u ? whoLine : [uname, unick, uid ? `(id ${uid})` : ''].filter(Boolean).join(' ');
       res = await send([event, `<b>${what}</b>`, `Хто: ${plain}`].join('\n'));
     }
+    log(res.ok ? 'sent' : `fail: ${res.description || ''}`);
     return new Response(res.ok ? 'ok' : 'fail', { headers: cors(origin) });
   },
 };

@@ -520,22 +520,23 @@ async function main() {
         const ok = document.execCommand('copy'); ta.remove(); return ok;
       } catch { return false; }
     }
-    orderBtn.addEventListener('click', async () => {
+    orderBtn.addEventListener('click', () => {
       notify('order', name, $('title').textContent, tg);
       const text = orderText();
-      const copied = await copyText(text);
-      if (copied) toast($('toast'), 'Текст скопійовано — вставте в чат і надішліть', 4000);
-      if (openChat()) return;
-      // Не відкрилось — віконце з кнопками
+      // Спершу — копіювання і відкриття чату (поки діє натискання), потім віконце-підстраховка:
+      // якщо Telegram чат не відкрив, клієнт бачить кнопку, а не «нічого»
+      const copying = copyText(text);
+      openChat();
       const body = document.createElement('div');
       body.className = 'order-sheet';
-      body.innerHTML = `<p>Напишіть нам — порахуємо, відповімо на питання й узгодимо замір.</p>
+      body.innerHTML = `<p>Відкриваємо чат з менеджером. Вставте текст (він уже скопійований) і надішліть — ми одразу відповімо.</p>
         <div class="order-msg"></div>`;
+      copying.then((ok) => { if (!ok) body.querySelector('p').textContent = 'Відкриваємо чат з менеджером. Напишіть, що готові замовити, — ми одразу відповімо.'; });
       body.querySelector('.order-msg').textContent = text;
       const go = document.createElement('button');
       go.type = 'button';
       go.className = 'btn order-go';
-      go.innerHTML = ICONS.chat + `<span>Написати в Telegram @${MANAGER_TELEGRAM}</span>`;
+      go.innerHTML = ICONS.chat + `<span>Не відкрився? Написати @${MANAGER_TELEGRAM}</span>`;
       go.addEventListener('click', openChat);
       const copy = document.createElement('button');
       copy.type = 'button';
