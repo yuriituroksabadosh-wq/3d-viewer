@@ -161,6 +161,7 @@ body {
   padding: 2px 8px;
   font-size: 13px;
   font-weight: 600;
+  color: #1f2328;
   white-space: nowrap;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
@@ -411,11 +412,11 @@ body {
 .slot-label { margin-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Плитки розділу «Вигляд»: однаковий розмір, іконка + підпис, золото, коли увімкнено */
-.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 8px 0; }
+.tiles { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 5px; margin: 8px 0; }
 .tile {
   --icon-accent: #c9a46a;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
-  min-width: 0; height: 64px; padding: 6px 2px;
+  min-width: 0; height: 52px; padding: 5px 1px;
   border: 1px solid var(--border); border-radius: 12px;
   background: var(--surface); color: #2f3236;
   font: inherit; cursor: pointer;
@@ -424,8 +425,8 @@ body {
 .tile:hover { background: rgba(201, 164, 106, 0.12); border-color: rgba(201, 164, 106, 0.5); }
 .tile:active { transform: scale(0.96); }
 .tile[aria-pressed="true"] { --icon-accent: #ffffff; background: linear-gradient(160deg, #d2b07a, #a8834c); border-color: #a8834c; color: #fff; }
-.tile svg { width: 24px; height: 24px; flex: none; }
-.tile-cap { font-size: 11.5px; font-weight: 600; line-height: 1.1; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile svg { width: 20px; height: 20px; flex: none; }
+.tile-cap { font-size: 10px; font-weight: 600; line-height: 1.1; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool svg { width: 24px !important; height: 24px !important; }
 
 /* КП: сторінки PDF у вікні */
