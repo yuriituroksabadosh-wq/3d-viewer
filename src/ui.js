@@ -99,9 +99,10 @@ export function createPanel(container, handlers, colors, opts = {}) {
   const blocks = [
     section('Вигляд'),
     h('div', { class: 'tiles' }, ...[...modeTiles, dimsBtn, facadesBtn, roomBtn, spinBtn, clientBtn].filter(Boolean)),
-    section('Анімація'),
+    // «Анімація» лише для простих моделей; у моделей з БАЗИСу «Розібрати» — на панелі іконок над моделлю
+    handlers.onExplode && section('Анімація'),
     openBtn && row(openBtn),
-    h('div', { class: 'tiles' }, tile(ICONS.explode, 'Розібрати', false, (on) => handlers.onExplode(on ? 1 : 0))),
+    handlers.onExplode && h('div', { class: 'tiles' }, tile(ICONS.explode, 'Розібрати', false, (on) => handlers.onExplode(on ? 1 : 0))),
   ];
   if (opts.materialSlots && opts.materialSlots.length && opts.materialOptions && opts.materialOptions.length) {
     // Матеріали з самої моделі: для кожної групи (фасади, корпус, стільниця) свій вибір

@@ -193,7 +193,21 @@ async function main() {
   // Лінійка: дві точки на моделі → відстань у мм
   const meshesForRuler = [];
   model.group.traverse((o) => { if (o.isMesh) meshesForRuler.push(o); });
-  const ruler = createRuler(viewer.scene, viewer.camera, canvas, $('rulers'), () => meshesForRuler);
+  const ruler = createRuler({
+    scene: viewer.scene,
+    camera: viewer.camera,
+    canvas,
+    layer: $('rulers'),
+    controls: viewer.controls,
+    getMeshes: () => meshesForRuler,
+  });
+  function toggleRuler() {
+    ruler.setActive(!ruler.active);
+    toast($('toast'), ruler.active
+      ? 'Лінійка: тримайте палець і наводьте — точка прилипає до кутів і ребер; відпустіть, щоб поставити'
+      : 'Лінійку вимкнено');
+    refreshTools();
+  }
 
   let downAt = null;
   canvas.addEventListener('pointerdown', (e) => { downAt = { x: e.clientX, y: e.clientY }; });
@@ -202,7 +216,7 @@ async function main() {
     const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
     downAt = null;
     if (moved > 6) return;
-    if (ruler.click(e.clientX, e.clientY)) return; // лінійка забирає натискання собі
+    if (ruler.active) return; // натискання забирає лінійка
     selectPart(model.pick(e.clientX, e.clientY, viewer.camera, canvas));
   });
   info.show(null);
@@ -211,6 +225,7 @@ async function main() {
   const toolbar = $('toolbar');
   const tools = {};
   let openOn = false;
+  let explodeOn = false;
   function tool(id, title, icon, onClick, caption) {
     const b = document.createElement('button');
     b.className = 'tool';
@@ -230,6 +245,9 @@ async function main() {
     tools.play.setAttribute('aria-pressed', String(openOn));
     tools.play.innerHTML = (openOn ? ICONS.close : ICONS.open) + `<span class="tool-cap">${openOn ? 'Закрити' : 'Відкрити'}</span>`;
     tools.play.title = openOn ? 'Закрити двері й шухляди' : 'Відкрити двері й шухляди';
+    tools.explode.setAttribute('aria-pressed', String(explodeOn));
+    tools.explode.innerHTML = ICONS.explode + `<span class="tool-cap">${explodeOn ? 'Зібрати' : 'Розібрати'}</span>`;
+    tools.ruler.setAttribute('aria-pressed', String(ruler.active));
     const canShow = !current && model.hasHidden;
     tools.hide.innerHTML = (canShow ? ICONS.show : ICONS.hide) + `<span class="tool-cap">${canShow ? 'Показати' : 'Сховати'}</span>`;
     tools.hide.title = canShow ? 'Показати все' : 'Сховати виділене';
@@ -252,6 +270,8 @@ async function main() {
       model.setOpen(openOn ? 1 : 0);
       refreshTools();
     }, 'Відкрити');
+    tool('explode', 'Розібрати / зібрати', ICONS.explode, () => doExplode(!explodeOn), 'Розібрати');
+    tool('ruler', 'Лінійка (замір)', ICONS.ruler, () => toggleRuler(), 'Лінійка');
     tool('hide', 'Сховати виділене', ICONS.hide, () => {
       if (current) {
         model.hide(selectedParts());
@@ -318,25 +338,30 @@ async function main() {
     onRoomVisible: model.hasRoom ? (on) => { roomShown = on; model.setKeyVisible('room', on); } : null,
     onKp: openKp ? () => openKp(model.name) : null,
     onSpin: (on) => viewer.setSpin(on, roomSpin),
-    onExplode: (t) => {
-      model.setExplode(t);
-      if (!isGlbModel) return;
-      if (t) {
-        // Стіни заважають бачити розібрані деталі — ховаємо, а камера відходить, щоб влізло все
-        roomBeforeExplode = model.hasRoom && roomShown;
-        if (roomBeforeExplode) { model.setKeyVisible('room', false); panel.setRoom(false); }
-        // Схему розбирання найкраще видно спереду трохи згори й зліва
-        viewer.focusBox(model.explodedBox(), [-0.2, 0.55, 1]);
-      } else {
-        if (roomBeforeExplode) { model.setKeyVisible('room', true); panel.setRoom(true); roomBeforeExplode = false; }
-        viewer.resetView();
-      }
-    },
+    // Для моделей з БАЗИСу «Розібрати» — на панелі іконок над моделлю; у панелі лише для простих JSON-моделей
+    onExplode: isGlbModel ? null : (t) => model.setExplode(t),
     onFacadeColor: (hex) => model.setMaterialColor('facade', hex),
     onSlotMaterial: (slot, index) => model.setSlotMaterial(slot, index),
     onReset: () => viewer.resetView(),
   }, colorOptions, { facades: model.hasFacades, viewMode: isGlbModel ? model.viewMode : undefined, materialSlots: model.materialSlots, materialOptions: model.materialOptions });
   viewer.onSpinStop = () => panel.setSpin(false);
+
+  /** Розібрати / зібрати (кнопка на панелі іконок). */
+  function doExplode(on) {
+    explodeOn = on;
+    model.setExplode(on ? 1 : 0);
+    if (on) {
+      // Стіни заважають бачити розібрані деталі — ховаємо, а камера відходить, щоб влізло все
+      roomBeforeExplode = model.hasRoom && roomShown;
+      if (roomBeforeExplode) { model.setKeyVisible('room', false); panel.setRoom(false); }
+      // Схему розбирання найкраще видно спереду трохи згори й зліва
+      viewer.focusBox(model.explodedBox(), [-0.2, 0.55, 1]);
+    } else {
+      if (roomBeforeExplode) { model.setKeyVisible('room', true); panel.setRoom(true); roomBeforeExplode = false; }
+      viewer.resetView();
+    }
+    refreshTools();
+  }
 
   // ---- Кубик орієнтації ----
   const cube = createViewCube($('viewcube'), viewer.camera, viewer.controls, (dir) => viewer.viewFrom(dir));
@@ -373,10 +398,7 @@ async function main() {
     {
       label: 'Лінійка (замір)',
       icon: '📏',
-      onClick: () => {
-        ruler.setActive(!ruler.active);
-        toast($('toast'), ruler.active ? 'Лінійка: натисніть дві точки на моделі' : 'Лінійку вимкнено');
-      },
+      onClick: () => toggleRuler(),
     },
     isGlbModel && { label: 'Показати все', icon: '👁', onClick: () => showAll() },
     openKp && { label: 'Комерційна пропозиція', icon: '📄', onClick: () => openKp(model.name) },
