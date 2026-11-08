@@ -511,3 +511,46 @@ body.shot #stage { position: fixed; inset: 0; min-height: 0; }
 /* Кубик орієнтації менший */
 #viewcube { transform: scale(0.72); transform-origin: top right; }
 @media (max-width: 560px) { #viewcube { transform: scale(0.62); transform-origin: bottom right; } }
+
+/* Розмірні лінії: загальні — синім, ланцюжки й висоти блоків — золотим */
+.dim-label { font-size: 12px; padding: 1px 6px; border-color: #1f5fbf; color: #1f3f7a; }
+.dim-label.dim-chain { border-color: #a8834c; color: #6b4f24; font-size: 11px; }
+
+/* Кнопка «Замовити» — внизу зліва на сцені */
+.order-btn {
+  position: absolute; left: 12px; bottom: 12px; z-index: 3;
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 44px; padding: 0 18px 0 14px; border-radius: 22px;
+  border: 1px solid #a8834c; background: linear-gradient(160deg, #d2b07a, #a8834c); color: #fff;
+  font: inherit; font-weight: 700; font-size: 15px; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(120, 90, 40, 0.35);
+}
+.order-btn[hidden] { display: none; }
+.order-btn svg { width: 20px; height: 20px; }
+.order-btn:active { transform: scale(0.97); }
+body.shot .order-btn { display: none !important; }
+
+/* Телефон/планшет: панель — висувна шторка знизу. Згорнута — лише вікно деталі,
+   модель займає майже весь екран; розгорнута — поверх моделі до 75% висоти. */
+.sheet-handle { display: none; }
+@media (max-width: 899px) {
+  #body { position: relative; }
+  #stage { margin-bottom: 104px; }
+  #sidebar {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 6;
+    height: 104px; max-height: none; overflow: hidden;
+    padding-top: 0;
+    transition: height 0.25s ease;
+  }
+  body.sheet-open #sidebar { height: auto; max-height: 75%; overflow-y: auto; box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.18); }
+  .sheet-handle {
+    display: flex; justify-content: center; align-items: center;
+    position: sticky; top: 0; z-index: 1;
+    height: 22px; margin: 0 -16px 2px; background: var(--surface);
+    cursor: pointer; touch-action: none;
+  }
+  .sheet-handle::before { content: ""; width: 44px; height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--text) 25%, transparent); }
+  #info { min-height: 0; padding: 8px 12px; }
+  body:not(.sheet-open) #info .row { display: none; }
+}
+body.shot #stage { margin-bottom: 0; }

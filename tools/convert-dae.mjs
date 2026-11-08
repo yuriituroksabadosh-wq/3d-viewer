@@ -15,6 +15,7 @@ import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import { dedup, instance, prune, weld, textureCompress, meshopt, getBounds } from '@gltf-transform/functions';
 import { MeshoptEncoder, MeshoptDecoder } from 'meshoptimizer';
 import sharp from 'sharp';
+import { daeToDocument } from './dae-parse.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -71,34 +72,6 @@ console.log('1/3 Читаю', daePath, mb(fs.statSync(daePath).size));
 const daeBytes = fs.readFileSync(daePath);
 const refs = referencedFiles(daeBytes.toString('utf8'));
 
-// ---- 1. assimp: DAE -> GLB (текстури поки зовнішні) ----
-const ajs = await require('assimpjs')();
-const files = new ajs.FileList();
-files.AddFile(path.basename(daePath), new Uint8Array(daeBytes));
-
-// Тимчасова папка: туди кладемо GLB і копії текстур під тими самими відносними шляхами
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dae2glb-'));
-let missing = 0;
-for (const rel of refs) {
-  const src = path.join(daeDir, rel);
-  if (!fs.existsSync(src)) { console.warn('   немає текстури:', rel); missing++; continue; }
-  const bytes = fs.readFileSync(src);
-  files.AddFile(rel, new Uint8Array(bytes));
-  files.AddFile(path.basename(rel), new Uint8Array(bytes));
-  fs.mkdirSync(path.join(tmp, path.dirname(rel)), { recursive: true });
-  fs.copyFileSync(src, path.join(tmp, rel));
-}
-console.log(`   текстур: ${refs.length}, не знайдено: ${missing}`);
-
-const result = ajs.ConvertFileList(files, 'glb2');
-if (!result.IsSuccess() || result.FileCount() === 0) {
-  console.error('assimp не зміг конвертувати файл:', result.GetErrorCode());
-  process.exit(1);
-}
-const rawGlb = path.join(tmp, 'raw.glb');
-fs.writeFileSync(rawGlb, result.GetFile(0).GetContent());
-console.log('2/3 assimp → GLB', mb(fs.statSync(rawGlb).size));
-
 // ---- 2. glTF-Transform: оптимізація ----
 await MeshoptEncoder.ready;
 await MeshoptDecoder.ready;
@@ -106,7 +79,53 @@ const io = new NodeIO()
   .registerExtensions(ALL_EXTENSIONS)
   .registerDependencies({ 'meshopt.encoder': MeshoptEncoder, 'meshopt.decoder': MeshoptDecoder });
 
-const doc = await io.read(rawGlb);
+// ---- 1. DAE -> документ glTF: свій швидкий розбір; якщо не впорався — assimp ----
+let doc;
+let tmp = null;
+const t0 = Date.now();
+if (!args.includes('--assimp')) {
+  try {
+    doc = daeToDocument(daePath);
+    console.log(`2/3 розібрано за ${((Date.now() - t0) / 1000).toFixed(1)} с (без assimp)`);
+  } catch (err) {
+    console.warn('   швидкий розбір не впорався (' + err.message + ') — пробую assimp');
+  }
+}
+if (!doc) doc = await viaAssimp();
+
+async function viaAssimp() {
+  // ---- 1. assimp: DAE -> GLB (текстури поки зовнішні) ----
+  const ajs = await require('assimpjs')();
+  const files = new ajs.FileList();
+  files.AddFile(path.basename(daePath), new Uint8Array(daeBytes));
+
+  // Тимчасова папка: туди кладемо GLB і копії текстур під тими самими відносними шляхами
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dae2glb-'));
+  let missing = 0;
+  for (const rel of refs) {
+    const src = path.join(daeDir, rel);
+    if (!fs.existsSync(src)) { console.warn('   немає текстури:', rel); missing++; continue; }
+    const bytes = fs.readFileSync(src);
+    files.AddFile(rel, new Uint8Array(bytes));
+    files.AddFile(path.basename(rel), new Uint8Array(bytes));
+    fs.mkdirSync(path.join(tmp, path.dirname(rel)), { recursive: true });
+    fs.copyFileSync(src, path.join(tmp, rel));
+  }
+  console.log(`   текстур: ${refs.length}, не знайдено: ${missing}`);
+
+  const result = ajs.ConvertFileList(files, 'glb2');
+  if (!result.IsSuccess() || result.FileCount() === 0) {
+    console.error('assimp не зміг конвертувати файл:', result.GetErrorCode());
+    process.exit(1);
+  }
+  const rawGlb = path.join(tmp, 'raw.glb');
+  fs.writeFileSync(rawGlb, result.GetFile(0).GetContent());
+  console.log('2/3 assimp → GLB', mb(fs.statSync(rawGlb).size));
+
+
+  return io.read(rawGlb);
+}
+
 const root = doc.getRoot();
 
 // assimp називає вузли за id з .dae (латинська «каша»), а людські назви лежать в атрибуті name.
@@ -182,7 +201,7 @@ console.log('   габарити (одиниці файлу):', size.map((v) => 
 
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 await io.write(outPath, doc);
-fs.rmSync(tmp, { recursive: true, force: true });
+if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
 console.log('3/3 Готово:', outPath, mb(fs.statSync(outPath).size));
 
 // КП з папки замовлення: PDF, назва якого починається на «КП» (наприклад, КП_48.pdf), шифруємо автоматично

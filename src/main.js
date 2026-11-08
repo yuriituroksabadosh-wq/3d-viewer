@@ -7,6 +7,9 @@ import { initTelegram, startParam } from './telegram.js';
 import { ICONS } from './icons.js';
 import { createMenu, showPartsList, createRuler, showHelp } from './extras.js';
 import { prepareKp } from './kp.js';
+import { createDims, boxDims, overallDims } from './dims.js';
+import { MANAGER_TELEGRAM } from './contact.js';
+import { notify } from './notify.js';
 
 // Готові варіанти кольору фасадів (перший пункт — колір/текстура з самого проєкту)
 const FACADE_COLORS = [
@@ -153,6 +156,7 @@ async function main() {
   $('loader-fill').style.width = '100%';
   $('loader').classList.add('done');
   if (!SHOT) viewer.intro();
+  if (!SHOT) notify('open', name, model.name, tg);
 
   // ---- Вибір деталі або цілого блоку ----
   let blockMode = false;
@@ -192,6 +196,16 @@ async function main() {
     else model.highlight(part);
     refreshInfo();
     refreshTools();
+    refreshDims();
+  }
+
+  // ---- Розміри (плитка «Розміри»): вибране — його розміри; нічого не вибрано — ланцюжки й габарити ----
+  const dims = isGlbModel ? createDims(viewer.scene, $('labels')) : null;
+  let dimsOn = false;
+  function refreshDims() {
+    if (!dims) return;
+    if (!dimsOn) { dims.show(null); return; }
+    dims.show(current ? boxDims(model.boxOf(selectedParts())) : overallDims(model.blocks, model.bounds));
   }
 
   function showAll() {
@@ -347,6 +361,7 @@ async function main() {
     refreshInfo();
     refreshTools();
     viewer.focusBox(model.boxOf(found));
+    refreshDims();
     toast($('toast'), found.length > 1 ? `Знайдено деталей: ${found.length}` : `Знайдено: ${found[0].name.title}`);
   }
 
@@ -380,6 +395,12 @@ async function main() {
   const panel = createPanel($('panel'), {
     onViewMode: isGlbModel ? (m) => model.setViewMode(m) : null,
     onDims(on) {
+      if (dims) {
+        dimsOn = on;
+        refreshDims();
+        if (on) toast($('toast'), 'Натисніть на деталь — покаже її розміри; на порожнє місце — загальні');
+        return;
+      }
       boundsBox.visible = on;
       labels.setItems(on ? dimensionAnchors(model.bounds) : []);
       labels.setVisible(on);
@@ -435,7 +456,55 @@ async function main() {
   if (openKp) {
     const kpBtn = $('kpbtn');
     kpBtn.hidden = false;
-    kpBtn.addEventListener('click', () => openKp(model.name));
+    kpBtn.addEventListener('click', () => { notify('kp', name, model.name, tg); openKp(model.name); });
+  }
+
+  // ---- Шторка панелі на телефоні: тап або свайп по смужці — розгорнути/згорнути ----
+  {
+    const sidebar = $('sidebar');
+    const handle = document.createElement('div');
+    handle.className = 'sheet-handle';
+    handle.setAttribute('role', 'button');
+    handle.setAttribute('aria-label', 'Розгорнути або згорнути панель');
+    sidebar.prepend(handle);
+    const setOpen = (on) => {
+      document.body.classList.toggle('sheet-open', on);
+      if (!on) sidebar.scrollTop = 0;
+    };
+    let y0 = null;
+    handle.addEventListener('pointerdown', (e) => { y0 = e.clientY; handle.setPointerCapture(e.pointerId); });
+    handle.addEventListener('pointerup', (e) => {
+      if (y0 === null) return;
+      const dy = e.clientY - y0;
+      y0 = null;
+      if (dy < -25) setOpen(true);
+      else if (dy > 25) setOpen(false);
+      else setOpen(!document.body.classList.contains('sheet-open'));
+    });
+    // Свайп униз по самій панелі, коли вона прокручена до верху, — теж згортає
+    let t0 = null;
+    sidebar.addEventListener('touchstart', (e) => { t0 = sidebar.scrollTop === 0 ? e.touches[0].clientY : null; }, { passive: true });
+    sidebar.addEventListener('touchend', (e) => {
+      if (t0 !== null && e.changedTouches[0].clientY - t0 > 60) setOpen(false);
+      t0 = null;
+    });
+    // Натиснули на модель — шторку ховаємо, щоб не заважала
+    canvas.addEventListener('pointerdown', () => setOpen(false));
+  }
+
+  // ---- «Замовити»: чат з менеджером у Telegram, повідомлення вже з назвою і номером ----
+  if (MANAGER_TELEGRAM && !SHOT) {
+    const orderBtn = $('order');
+    orderBtn.hidden = false;
+    orderBtn.innerHTML = ICONS.chat + '<span>Замовити</span>';
+    orderBtn.addEventListener('click', () => {
+      notify('order', name, model.name, tg);
+      const no = model.info?.prefix ? ` ${model.info.prefix}` : '';
+      const text = `Добрий день! Цікавить «${model.name}»${no}. Дивився 3D-модель.`;
+      const url = `https://t.me/${MANAGER_TELEGRAM}?text=${encodeURIComponent(text)}`;
+      if (inTelegram && tg.openTelegramLink) tg.openTelegramLink(url);
+      else window.open(url, '_blank', 'noopener');
+    });
   }
 
   // ---- Меню в шапці ----
@@ -478,7 +547,8 @@ async function main() {
     viewer.controls.update();
     viewer.renderer.render(viewer.scene, viewer.camera);
     cube.render();
-    labels.update(viewer.camera, canvas.clientWidth, canvas.clientHeight);
+    if (dims) dims.update(viewer.camera, viewer.controls.target, canvas.clientWidth, canvas.clientHeight);
+    else labels.update(viewer.camera, canvas.clientWidth, canvas.clientHeight);
     ruler.update(canvas.clientWidth, canvas.clientHeight);
     // Знімок: кілька кадрів на підвантаження текстур, далі зберігаємо JPEG одразу після рендеру
     if (SHOT && !window.__shot && ++shotFrames > 20) {

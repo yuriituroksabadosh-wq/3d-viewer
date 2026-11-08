@@ -873,6 +873,23 @@ export async function loadGltfModel(buffer, title) {
 
   const count = (key) => parts.filter((p) => p.key === key).length;
 
+  // Блоки для розмірів: габарит і куди дивиться фронт (за дверима/шухлядами; інакше — за формою)
+  const blocks = [];
+  for (const g of new Set(parts.map((p) => p.group))) {
+    const own = g.parts.filter((p) => p.key !== 'room' && !p.technical);
+    if (!own.length) continue;
+    const b = boxOf(own);
+    const s = b.getSize(new THREE.Vector3());
+    if (s.y < 150 || Math.max(s.x, s.z) < 150) continue;
+    const facing = new THREE.Vector3();
+    for (const op of openers) if (own.includes(op.facade)) facing.add(op.dir);
+    if (facing.lengthSq() < 1e-6) {
+      if (s.x >= s.z) facing.set(0, 0, 1);
+      else facing.set(Math.sign(bounds.center.x - b.getCenter(new THREE.Vector3()).x) || 1, 0, 0);
+    }
+    blocks.push({ name: g.name, box: b, facing: facing.normalize() });
+  }
+
   return {
     kind: 'glb',
     name: info?.name || title,
@@ -880,6 +897,7 @@ export async function loadGltfModel(buffer, title) {
     group,
     parts,
     bounds,
+    blocks,
     update,
     highlight,
     select,
