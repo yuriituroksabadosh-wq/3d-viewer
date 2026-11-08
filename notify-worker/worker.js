@@ -52,13 +52,14 @@ export default {
     const text = [
       `${event}`,
       title ? `«${title}»` : model,
+      `https://yuriituroksabadosh-wq.github.io/3d-viewer/?model=${model}`,
       user ? `Хто: ${user}` : `Хто: невідомо (${where})`,
     ].join('\n');
 
     await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: env.CHAT_ID, text, disable_notification: data.event === 'open' }),
+      body: JSON.stringify({ chat_id: env.CHAT_ID, text, link_preview_options: { is_disabled: true }, disable_notification: data.event === 'open' }),
     });
     return new Response('ok', { headers: cors(origin) });
   },

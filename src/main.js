@@ -5,7 +5,7 @@ import { createPanel, createInfoBox, createLabels, toast } from './ui.js';
 import { createViewCube } from './viewcube.js';
 import { initTelegram, startParam } from './telegram.js';
 import { ICONS } from './icons.js';
-import { createMenu, showPartsList, createRuler, showHelp } from './extras.js';
+import { createMenu, showPartsList, createRuler, showHelp, openSheet } from './extras.js';
 import { prepareKp } from './kp.js';
 import { createDims, boxDims, overallDims } from './dims.js';
 import { MANAGER_TELEGRAM } from './contact.js';
@@ -156,7 +156,7 @@ async function main() {
   $('loader-fill').style.width = '100%';
   $('loader').classList.add('done');
   if (!SHOT) viewer.intro();
-  if (!SHOT) notify('open', name, model.name, tg);
+  if (!SHOT) notify('open', name, $('title').textContent, tg);
 
   // ---- Вибір деталі або цілого блоку ----
   let blockMode = false;
@@ -456,7 +456,7 @@ async function main() {
   if (openKp) {
     const kpBtn = $('kpbtn');
     kpBtn.hidden = false;
-    kpBtn.addEventListener('click', () => { notify('kp', name, model.name, tg); openKp(model.name); });
+    kpBtn.addEventListener('click', () => { notify('kp', name, $('title').textContent, tg); openKp(model.name); });
   }
 
   // ---- Шторка панелі на телефоні: тап або свайп по смужці — розгорнути/згорнути ----
@@ -497,13 +497,41 @@ async function main() {
     const orderBtn = $('order');
     orderBtn.hidden = false;
     orderBtn.innerHTML = ICONS.chat + '<span>Замовити</span>';
+    // Відкриття чату буває мовчки заблоковане (стара версія Telegram, вбудований браузер),
+    // тож завжди показуємо віконце: велика кнопка «Написати в Telegram» + «Скопіювати повідомлення».
+    const chatUrl = `https://t.me/${MANAGER_TELEGRAM}`;
+    function openChat() {
+      try {
+        if (inTelegram && tg.openTelegramLink && (!tg.isVersionAtLeast || tg.isVersionAtLeast('6.1'))) { tg.openTelegramLink(chatUrl); return; }
+        if (inTelegram && tg.openLink) { tg.openLink(chatUrl); return; }
+      } catch { /* далі — звичайне посилання */ }
+      const w = window.open(chatUrl, '_blank', 'noopener');
+      if (!w) window.location.href = chatUrl;
+    }
     orderBtn.addEventListener('click', () => {
-      notify('order', name, model.name, tg);
+      notify('order', name, $('title').textContent, tg);
       const no = model.info?.prefix ? ` ${model.info.prefix}` : '';
       const text = `Добрий день! Цікавить «${model.name}»${no}. Дивився 3D-модель.`;
-      const url = `https://t.me/${MANAGER_TELEGRAM}?text=${encodeURIComponent(text)}`;
-      if (inTelegram && tg.openTelegramLink) tg.openTelegramLink(url);
-      else window.open(url, '_blank', 'noopener');
+      const body = document.createElement('div');
+      body.className = 'order-sheet';
+      body.innerHTML = `<p>Напишіть нам — порахуємо, відповімо на питання й узгодимо замір.</p>
+        <div class="order-msg"></div>`;
+      body.querySelector('.order-msg').textContent = text;
+      const go = document.createElement('button');
+      go.type = 'button';
+      go.className = 'btn order-go';
+      go.innerHTML = ICONS.chat + `<span>Написати в Telegram @${MANAGER_TELEGRAM}</span>`;
+      go.addEventListener('click', openChat);
+      const copy = document.createElement('button');
+      copy.type = 'button';
+      copy.className = 'btn';
+      copy.textContent = 'Скопіювати повідомлення';
+      copy.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(text); copy.textContent = 'Скопійовано — вставте в чат'; }
+        catch { window.prompt('Скопіюйте повідомлення:', text); }
+      });
+      body.append(go, copy);
+      openSheet('Замовити', body);
     });
   }
 

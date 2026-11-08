@@ -554,3 +554,11 @@ body.shot .order-btn { display: none !important; }
   body:not(.sheet-open) #info .row { display: none; }
 }
 body.shot #stage { margin-bottom: 0; }
+
+/* Віконце «Замовити» */
+.order-sheet { display: flex; flex-direction: column; gap: 10px; padding-bottom: 6px; }
+.order-sheet p { margin: 0; color: var(--hint); }
+.order-msg { padding: 10px 12px; border-radius: 12px; background: var(--bg); font-size: 14px; }
+.order-go { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 52px;
+  background: linear-gradient(160deg, #d2b07a, #a8834c); border-color: #a8834c; color: #fff; font-size: 16px; }
+.order-go svg { width: 22px; height: 22px; }
