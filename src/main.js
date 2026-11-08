@@ -497,26 +497,22 @@ async function main() {
     const orderBtn = $('order');
     orderBtn.hidden = false;
     orderBtn.innerHTML = ICONS.chat + '<span>Замовити</span>';
-    // Натискання одразу відкриває чат з менеджером. Готовий текст Telegram у чат з людиною
-    // з Mini App не підставляє (посилання з ?text= він відхиляє — лише вібрує), тому текст
-    // спершу копіюємо в буфер: клієнту лишається вставити й надіслати.
-    // Якщо відкрити чат не вдалося (немає Telegram, заблоковано) — показуємо віконце з кнопками.
+    // «Замовити»: клієнт має потрапити в особистий чат з менеджером.
+    // На iPhone (Telegram API 9.6) openTelegramLink на чат з людиною мовчки ігнорується,
+    // тому основний спосіб — сторінка t.me у вбудованому браузері: вона сама перекидає в чат
+    // (або має кнопку «Send Message»). Запасні: пряме посилання tg:// і openTelegramLink.
+    // Текст звернення копіюємо в буфер — у чаті з людиною Telegram його сам не підставляє.
     const chatUrl = `https://t.me/${MANAGER_TELEGRAM}`;
-    function openChat() {
-      try {
-        if (inTelegram && tg.openTelegramLink && (!tg.isVersionAtLeast || tg.isVersionAtLeast('6.1'))) {
-          // З Bot API 7.0 Telegram відкриває чат ПІД міні-апкою і не закриває її — клієнт чату не бачить.
-          // Тому після переходу закриваємо міні-апку (без підтвердження): клієнт одразу в чаті з менеджером.
-          try { tg.disableClosingConfirmation && tg.disableClosingConfirmation(); } catch { /* немає */ }
-          tg.openTelegramLink(chatUrl);
-          setTimeout(() => { try { tg.close(); } catch { /* немає */ } }, 600);
-          return true;
-        }
-        if (inTelegram && tg.openLink) { tg.openLink(chatUrl); return true; }
-      } catch { /* далі — звичайне посилання */ }
-      const w = window.open(chatUrl, '_blank', 'noopener');
-      return !!w;
-    }
+    const tgUrl = `tg://resolve?domain=${MANAGER_TELEGRAM}`;
+    const way1 = () => { // браузер → t.me → чат
+      try { if (inTelegram && tg.openLink) { tg.openLink(chatUrl, { try_instant_view: false }); return; } } catch { /* нижче */ }
+      if (!window.open(chatUrl, '_blank', 'noopener')) window.location.href = chatUrl;
+    };
+    const way2 = () => { window.location.href = tgUrl; }; // схема tg:// — відкриває застосунок Telegram
+    const way3 = () => { // внутрішній перехід Telegram
+      try { if (inTelegram && tg.openTelegramLink) { tg.openTelegramLink(chatUrl); return; } } catch { /* нижче */ }
+      way1();
+    };
     const orderText = () => `Доброго дня! Ознайомився з 3D-моделлю «${$('title').textContent}», хочу замовити і обговорити деталі.`;
     async function copyText(text) {
       try { await navigator.clipboard.writeText(text); return true; } catch { /* нижче — запасний спосіб */ }
@@ -527,46 +523,30 @@ async function main() {
         const ok = document.execCommand('copy'); ta.remove(); return ok;
       } catch { return false; }
     }
+    const wayBtn = (label, fn, main) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = main ? 'btn order-go' : 'btn';
+      b.innerHTML = (main ? ICONS.chat : '') + `<span>${label}</span>`;
+      b.addEventListener('click', fn);
+      return b;
+    };
     orderBtn.addEventListener('click', () => {
       notify('order', name, $('title').textContent, tg);
       const text = orderText();
-      // Спершу — копіювання і відкриття чату (поки діє натискання), потім віконце-підстраховка:
-      // якщо Telegram чат не відкрив, клієнт бачить кнопку, а не «нічого»
       const copying = copyText(text);
-      // Чат — після копіювання: міні-апка одразу закривається, текст має встигнути потрапити в буфер
-      copying.finally(() => openChat());
+      copying.finally(() => way1());
       const body = document.createElement('div');
       body.className = 'order-sheet';
-      body.innerHTML = `<p>Відкриваємо чат з менеджером. Вставте текст (він уже скопійований) і надішліть — ми одразу відповімо.</p>
+      body.innerHTML = `<p>Відкриваємо чат з менеджером @${MANAGER_TELEGRAM}. Вставте текст (він уже скопійований) і надішліть — ми одразу відповімо.</p>
         <div class="order-msg"></div>`;
-      copying.then((ok) => { if (!ok) body.querySelector('p').textContent = 'Відкриваємо чат з менеджером. Напишіть, що готові замовити, — ми одразу відповімо.'; });
+      copying.then((ok) => { if (!ok) body.querySelector('p').textContent = `Відкриваємо чат з менеджером @${MANAGER_TELEGRAM}. Напишіть, що готові замовити, — ми одразу відповімо.`; });
       body.querySelector('.order-msg').textContent = text;
-      // Звичайне посилання: Telegram сам перехоплює натискання на t.me — надійніше за виклик із коду
-      const go = document.createElement('a');
-      go.className = 'btn order-go';
-      go.href = chatUrl;
-      go.target = '_blank';
-      go.rel = 'noopener';
-      go.addEventListener('click', (e) => { if (inTelegram) { e.preventDefault(); openChat(); } });
-      go.innerHTML = ICONS.chat + `<span>Не відкрився? Написати @${MANAGER_TELEGRAM}</span>`;
-      // Останній варіант: через браузер (сторінка t.me з кнопкою «Send Message» веде в чат)
-      const viaBrowser = document.createElement('button');
-      viaBrowser.type = 'button';
-      viaBrowser.className = 'btn';
-      viaBrowser.textContent = 'Відкрити чат через браузер';
-      viaBrowser.addEventListener('click', () => {
-        try { if (inTelegram && tg.openLink) { tg.openLink(chatUrl, { try_instant_view: false }); return; } } catch { /* нижче */ }
-        window.open(chatUrl, '_blank', 'noopener');
-      });
-      const copy = document.createElement('button');
-      copy.type = 'button';
-      copy.className = 'btn';
-      copy.textContent = 'Скопіювати повідомлення';
-      copy.addEventListener('click', async () => {
-        try { await navigator.clipboard.writeText(text); copy.textContent = 'Скопійовано — вставте в чат'; }
-        catch { window.prompt('Скопіюйте повідомлення:', text); }
-      });
-      body.append(go, viaBrowser, copy);
+      body.append(
+        wayBtn(`Написати @${MANAGER_TELEGRAM}`, way1, true),
+        wayBtn('Не відкрилось? Спосіб 2', way2),
+        wayBtn('Спосіб 3', way3),
+      );
       openSheet('Замовити', body);
     });
   }
