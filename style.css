@@ -517,8 +517,9 @@ body.shot #stage { position: fixed; inset: 0; min-height: 0; }
 .dim-label.dim-chain { border-color: #a8834c; color: #6b4f24; font-size: 11px; }
 
 /* Кнопка «Замовити» — внизу зліва на сцені */
+.order-bar { position: absolute; left: 12px; bottom: 12px; z-index: 3; display: flex; gap: 8px; }
+body.shot .order-bar { display: none !important; }
 .order-btn {
-  position: absolute; left: 12px; bottom: 12px; z-index: 3;
   display: inline-flex; align-items: center; gap: 7px;
   height: 44px; padding: 0 18px 0 14px; border-radius: 22px;
   border: 1px solid #a8834c; background: linear-gradient(160deg, #d2b07a, #a8834c); color: #fff;
@@ -529,6 +530,8 @@ body.shot #stage { position: fixed; inset: 0; min-height: 0; }
 .order-btn svg { width: 20px; height: 20px; }
 .order-btn:active { transform: scale(0.97); }
 body.shot .order-btn { display: none !important; }
+.order-btn.decline-btn { background: rgba(255, 255, 255, 0.92); color: #6b4f24; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12); padding: 0 16px; }
+.order-sheet .btn.reason { min-height: 44px; }
 
 /* Телефон/планшет: панель — висувна шторка знизу. Згорнута — лише вікно деталі,
    модель займає майже весь екран; розгорнута — поверх моделі до 75% висоти. */

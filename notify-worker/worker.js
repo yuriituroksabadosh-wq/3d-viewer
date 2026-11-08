@@ -13,6 +13,7 @@ const EVENTS = {
   open: '👀 Відкрили 3D-модель',
   kp: '📄 Відкрили КП',
   order: '🛒 ЗАЯВКА: хоче замовити',
+  decline: '❌ Відмовився від проєкту',
 };
 
 const cors = (origin) => ({
@@ -108,14 +109,14 @@ export default {
     const log = (result) => console.log(JSON.stringify({ event: data.event, model, v: clean(data.v, 20), p: clean(data.p, 30), tg: !!data.telegram, uid: u && u.id, signed: !!tgUser, result }));
 
     // Свої відкриття (менеджер дивиться сам) — не повідомляємо
-    if (u && String(u.id) === String(env.CHAT_ID)) { log('own'); return new Response('own', { headers: cors(origin) }); }
+    if (u && String(u.id) === String(env.CHAT_ID)) { log('own'); return new Response('{"ok":true,"client":"own"}', { headers: { ...cors(origin), 'Content-Type': 'application/json' } }); }
 
     // Повтори того самого (оновив сторінку) — не частіше разу на 2 хв від одного клієнта.
     // Ключ — Telegram-користувач, а не IP: інакше вся сім'я на одному Wi-Fi «зливається» в одного.
     const who = (u && u.id) || request.headers.get('CF-Connecting-IP') || '';
     const cache = caches.default;
     const key = new Request(`https://notify.local/${data.event}/${model}/${encodeURIComponent(who)}`);
-    if (await cache.match(key)) { log('repeat'); return new Response('repeat', { headers: cors(origin) }); }
+    if (await cache.match(key)) { log('repeat'); return new Response('{"ok":true,"client":"repeat"}', { headers: { ...cors(origin), 'Content-Type': 'application/json' } }); }
     await cache.put(key, new Response('1', { headers: { 'Cache-Control': 'max-age=120' } }));
 
     // «Санвузол · №460» → «№460 · Санвузол»: спершу номер замовлення
@@ -135,10 +136,11 @@ export default {
     const toManager = (text) => api('sendMessage', { chat_id: env.CHAT_ID, text, parse_mode: 'HTML', disable_notification: data.event === 'open' });
 
     // Клікабельне ім'я Telegram приймає не для кожного клієнта — тоді шлемо без посилання
-    let res = await toManager([event, `<b>${what}</b>`, `Хто: ${whoLine}`].join('\n'));
+    const reason = data.event === 'decline' && data.reason ? `Причина: ${clean(data.reason, 60)}` : '';
+    let res = await toManager([event, `<b>${what}</b>`, `Хто: ${whoLine}`, reason].filter(Boolean).join('\n'));
     if (!res.ok) {
       const plain = !u ? whoLine : [uname, unick, uid ? `(id ${uid})` : ''].filter(Boolean).join(' ');
-      res = await toManager([event, `<b>${what}</b>`, `Хто: ${plain}`].join('\n'));
+      res = await toManager([event, `<b>${what}</b>`, `Хто: ${plain}`, reason].filter(Boolean).join('\n'));
     }
 
     // Заявка: клієнту — повідомлення з кнопкою в чат менеджера (лише перевіреному клієнту)

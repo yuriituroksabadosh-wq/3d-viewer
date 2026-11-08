@@ -568,6 +568,33 @@ async function main() {
         body.append(sheetBtn('Закрити', close, true));
       }
     });
+
+    // «Відмовитись»: клієнт одним тапом вибирає причину — менеджеру сповіщення з нею
+    const declineBtn = $('decline');
+    declineBtn.hidden = false;
+    declineBtn.addEventListener('click', () => {
+      const body = document.createElement('div');
+      body.className = 'order-sheet';
+      const msg = document.createElement('p');
+      msg.textContent = 'Шкода! Підкажіть, будь ласка, чому — це допоможе нам стати кращими:';
+      body.append(msg);
+      let close = () => {};
+      const send = async (reason) => {
+        body.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+        const res = await notify('decline', name, $('title').textContent, tg, reason);
+        body.replaceChildren(msg);
+        msg.textContent = res && res.ok
+          ? 'Дякуємо, що переглянули проєкт! Якщо передумаєте — ми на зв\'язку.'
+          : `Не вдалося надіслати. Напишіть, будь ласка, менеджеру: @${MANAGER_TELEGRAM}`;
+        body.append(sheetBtn('Закрити', () => close(), true));
+      };
+      for (const r of ['Дорого', 'Обрали іншого виконавця', 'Передумали', 'Повернемось пізніше', 'Без причини']) {
+        const b = sheetBtn(r, () => send(r));
+        b.classList.add('reason');
+        body.append(b);
+      }
+      close = openSheet('Відмовитись', body);
+    });
   }
 
   // ---- Меню в шапці ----
