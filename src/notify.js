@@ -1,6 +1,6 @@
 // Сповіщення менеджеру: клієнт відкрив модель / КП / натиснув «Замовити».
 // Адреса воркера (notify-worker/) — після його розгортання; порожня — нічого не надсилаємо.
-export const NOTIFY_URL = '';
+export const NOTIFY_URL = 'https://m3-notify.yurii-turok-sabadosh.workers.dev';
 
 /** event: 'open' | 'kp' | 'order'. Тихо ігнорує будь-які помилки. */
 export function notify(event, model, title, tg) {
