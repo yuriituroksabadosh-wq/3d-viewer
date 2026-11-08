@@ -110,52 +110,82 @@ const FASTENER_TYPES = [
 // Перевірено на моделі: точка болта лежить у плиті, в торець якої він входить; болт іде вздовж −X на ~34 мм.
 const MINIFIX_RE = /twister|rastex/i;
 
+// Габарити плит. Плита в .dae — це кілька сіток-граней (пласті, крайки) під одним вузлом,
+// тому коробку збираємо по вузлу-деталі, а не по окремій сітці.
 function boardBoxes(root) {
-  const out = [];
+  const byNode = new Map();
   root.traverse((o) => {
-    if (!o.isMesh) return;
+    if (!o.isMesh || !o.parent) return;
     const names = [].concat(o.material).map((m) => (m && m.name) || '').join(' ');
     if (!/дсп|хдф|мдф|двп|стільниц|столешн|крайка|kronospan|egger|swiss|cleaf/i.test(names)) return;
-    out.push(new THREE.Box3().setFromObject(o));
+    const b = new THREE.Box3().setFromObject(o);
+    const prev = byNode.get(o.parent);
+    byNode.set(o.parent, prev ? prev.union(b) : b);
   });
-  return out;
+  return [...byNode.values()].filter((b) => { const s = b.getSize(new THREE.Vector3()); return Math.min(s.x, s.y, s.z) >= 5; });
 }
 
+// Будова (viyar.ua, Twister DU 232, код 57722): болт L = 30 мм, у боковину вкручується на 11,5 мм,
+// решта 18,5 — у торець полиці до ексцентрика Rastex 15 (Ø15, глибина 12,5).
+// Перевірено на моделі: точка з БАЗИСу лежить на площині стику, на РЕБРІ полиці (а не на осі отвору);
+// −X — у боковину. Тому вісь болта ставимо посередині товщини полиці, ексцентрик — за 18,5 мм від стику,
+// урівень із пластю полиці, протилежною тій, на якій лежить точка.
+const TW_IN_SIDE = 11.5, TW_TO_CAM = 18.5, CAM_R = 7.5, CAM_H = 12.5;
+const AXES = ['x', 'y', 'z'];
+const thinAxis = (b) => { const s = b.getSize(new THREE.Vector3()); return s.x <= s.y && s.x <= s.z ? 'x' : s.y <= s.z ? 'y' : 'z'; };
+
 function addMinifix(root, f, boxes, cache) {
-  const axis = new THREE.Vector3(...f.ax).negate().normalize(); // болт: від точки вздовж −X
+  const ax = new THREE.Vector3(...f.ax).normalize(); // від стику в полицю; −ax — у боковину
   const p = new THREE.Vector3(...f.p);
   const up = new THREE.Vector3(0, 1, 0);
-  const main = [Math.abs(axis.x), Math.abs(axis.y), Math.abs(axis.z)];
-  const boltIdx = main.indexOf(Math.max(...main));
-  // Плита з ексцентриком: містить точку, і її товщина — не вздовж болта
-  let camAxis = null;
-  for (const b of boxes) {
-    if (!b.clone().expandByScalar(0.5).containsPoint(p)) continue;
-    const s = b.getSize(new THREE.Vector3());
-    const thinIdx = s.x <= s.y && s.x <= s.z ? 0 : s.y <= s.z ? 1 : 2;
-    if (thinIdx === boltIdx) continue;
-    camAxis = new THREE.Vector3(thinIdx === 0 ? 1 : 0, thinIdx === 1 ? 1 : 0, thinIdx === 2 ? 1 : 0);
-    break;
-  }
-  if (!cache.boltGeo) {
-    cache.boltGeo = new THREE.CylinderGeometry(3, 3, 34, 12);
-    cache.camGeo = new THREE.CylinderGeometry(7.5, 7.5, 12, 24);
+  const k = AXES[[Math.abs(ax.x), Math.abs(ax.y), Math.abs(ax.z)].indexOf(Math.max(Math.abs(ax.x), Math.abs(ax.y), Math.abs(ax.z)))];
+  // Полиця: її торець лежить на площині стику, товщина — не вздовж болта, і вона поруч із точкою
+  const probe = p.clone().addScaledVector(ax, 5);
+  const shelf = boxes.find((b) => thinAxis(b) !== k
+    && Math.abs((ax[k] > 0 ? b.min[k] : b.max[k]) - p[k]) < 0.6
+    && b.clone().expandByScalar(0.6).containsPoint(probe));  if (!cache.boltGeo) {
+    // Twister: голівка під ексцентрик, шийка, фланець на стику, різьба в боковині (y = 0 — голівка)
+    const L = TW_TO_CAM + TW_IN_SIDE;
+    cache.boltGeo = new THREE.LatheGeometry([V2(0, 0), V2(3.5, 0.5), V2(3.5, 3.5), V2(2.5, 4.5), V2(2.5, TW_TO_CAM - 1),
+      V2(5, TW_TO_CAM - 1), V2(5, TW_TO_CAM), V2(4, TW_TO_CAM + 0.5), V2(4, L - 1.5), V2(2, L), V2(0, L)], 16);
+    cache.camGeo = new THREE.CylinderGeometry(CAM_R, CAM_R, CAM_H, 24);
+    cache.slotGeo = new THREE.BoxGeometry(10, 0.6, 1.8);
     cache.metal = new THREE.MeshStandardMaterial({ color: 0xb7bcc2, metalness: 0.8, roughness: 0.4, name: 'Мініфікс' });
+    cache.dark = new THREE.MeshStandardMaterial({ color: 0x55595e, metalness: 0.6, roughness: 0.5, name: 'Мініфікс (шліц)' });
   }
+  // Вісь болта: посередині товщини полиці (якщо полицю знайдено)
+  const q = p.clone();
+  let camDir = null;
+  if (shelf) {
+    const t = thinAxis(shelf);
+    const mid = (shelf.min[t] + shelf.max[t]) / 2;
+    // точка лежить на одній пласті — ексцентрик відкритий на протилежній
+    const sign = p[t] > mid ? -1 : 1;
+    q[t] = mid;
+    camDir = new THREE.Vector3(); camDir[t] = sign;
+    var faceAt = sign > 0 ? shelf.max[t] : shelf.min[t];
+    var tKey = t;
+  }
+  const head = q.clone().addScaledVector(ax, TW_TO_CAM); // центр ексцентрика
   const bolt = new THREE.Object3D();
   bolt.name = f.name;
   const bm = new THREE.Mesh(cache.boltGeo, cache.metal);
-  bm.quaternion.setFromUnitVectors(up, axis);
-  bm.position.copy(p).addScaledVector(axis, 17);
+  bm.quaternion.setFromUnitVectors(up, ax.clone().negate()); // від голівки до боковини
+  bm.position.copy(head);
   bolt.add(bm);
   root.add(bolt);
-  if (camAxis) {
+  if (camDir) {
     const cam = new THREE.Object3D();
     cam.name = 'Мініфікс Rastex 15 (ексцентрик)';
+    const c = head.clone();
+    c[tKey] = faceAt - camDir[tKey] * (CAM_H / 2 + 0.1); // урівень із пластю
     const cm = new THREE.Mesh(cache.camGeo, cache.metal);
-    cm.quaternion.setFromUnitVectors(up, camAxis);
-    cm.position.copy(p);
-    cam.add(cm);
+    cm.quaternion.setFromUnitVectors(up, camDir);
+    cm.position.copy(c);
+    const sm = new THREE.Mesh(cache.slotGeo, cache.dark); // шліц під викрутку
+    sm.quaternion.copy(cm.quaternion);
+    sm.position.copy(c).addScaledVector(camDir, CAM_H / 2);
+    cam.add(cm, sm);
     root.add(cam);
   }
 }
@@ -164,23 +194,36 @@ function addMinifix(root, f, boxes, cache) {
 // Перевірено на моделі: точка — ребро стику на нижній пласті полиці, X — уздовж полиці від боковини,
 // Y — униз по боковині, Z — уздовж стику.
 const SURFACE_TIE_RE = /mfix/i;
+// Будова (viyar.ua, «Стяжка Mfix пластик 18мм», тип «полицетримач», глибина свердління 14 мм):
+// пластиковий корпус Ø20 утоплений знизу в полицю біля стику, зверху (з пласті) видно металевий
+// ексцентрик зі шліцом; у відкритий бік корпусу заходить металевий штир із боковини.
 function addSurfaceTie(root, f, cache) {
-  if (!cache.tieParts) {
-    const T = 3, A = 20, W = 24; // товщина стінки, полиця кутника, ширина
-    const side = new THREE.BoxGeometry(T, A, W).translate(T / 2, A / 2, 0);
-    const shelf = new THREE.BoxGeometry(A, T, W).translate(A / 2, T / 2, 0);
-    const tri = new THREE.Shape([new THREE.Vector2(0, 0), new THREE.Vector2(A - 1, 0), new THREE.Vector2(0, A - 1)]);
-    const rib = new THREE.ExtrudeGeometry(tri, { depth: 3, bevelEnabled: false }).translate(0, 0, -1.5);
-    cache.tieParts = [side, shelf, rib];
-    cache.tieMat = new THREE.MeshStandardMaterial({ color: 0x1d1f22, metalness: 0, roughness: 0.6, name: 'Пластик чорний' });
+  const R = 10, H = 14, X0 = R; // радіус корпусу, глибина, центр від стику
+  if (!cache.tieGeo) {
+    cache.tieGeo = {
+      body: new THREE.CylinderGeometry(R, R, H, 24).translate(X0, -H / 2 + 0.2, 0), // y < 0 — усередину полиці
+      cam: new THREE.CylinderGeometry(7, 7, 0.6, 24).translate(X0, 0.5, 0), // ексцентрик урівень із пластю
+      slot: new THREE.BoxGeometry(9, 0.4, 1.6).translate(X0, 0.9, 0),
+      pin: new THREE.CylinderGeometry(2.5, 2.5, 22, 12).rotateZ(Math.PI / 2).translate(1, -7, 0), // штир: 10 мм у боковині
+    };
+    cache.tieMetal = new THREE.MeshStandardMaterial({ color: 0xb7bcc2, metalness: 0.8, roughness: 0.35, name: 'Стяжка Mfix (метал)' });
+    cache.tieDark = new THREE.MeshStandardMaterial({ color: 0x55595e, metalness: 0.6, roughness: 0.5, name: 'Стяжка Mfix (шліц)' });
+    cache.tiePlastic = {};
   }
+  const color = /біл|бел/i.test(f.name) ? 0xf1f0ec : /сір|сер/i.test(f.name) ? 0x9a9da1 : /беж/i.test(f.name) ? 0xe8dcc0
+    : /горіх|корич/i.test(f.name) ? 0x5a4334 : 0x1d1f22;
+  cache.tiePlastic[color] = cache.tiePlastic[color] || new THREE.MeshStandardMaterial({ color, metalness: 0, roughness: 0.6, name: 'Стяжка Mfix (пластик)' });
+  // Локальні осі (перевірено на моделі): точка — на ребрі стику на нижній пласті полиці,
+  // X — від стику вглиб полиці, Y — з пласті назовні (униз), Z — уздовж стику. Корпус — у бік −Y.
   const ax = new THREE.Vector3(...f.ax).normalize();
   const ay = new THREE.Vector3(...(f.ay || [0, -1, 0])).normalize();
-  const az = Array.isArray(f.az) ? new THREE.Vector3(...f.az).normalize() : new THREE.Vector3().crossVectors(ax, ay);
+  const az = new THREE.Vector3().crossVectors(ax, ay);
   const node = new THREE.Object3D();
   node.name = f.name;
   new THREE.Matrix4().makeBasis(ax, ay, az).setPosition(...f.p).decompose(node.position, node.quaternion, node.scale);
-  for (const g of cache.tieParts) node.add(new THREE.Mesh(g, cache.tieMat));
+  const g = cache.tieGeo;
+  node.add(new THREE.Mesh(g.body, cache.tiePlastic[color]), new THREE.Mesh(g.cam, cache.tieMetal),
+    new THREE.Mesh(g.slot, cache.tieDark), new THREE.Mesh(g.pin, cache.tieMetal));
   root.add(node);
 }
 
