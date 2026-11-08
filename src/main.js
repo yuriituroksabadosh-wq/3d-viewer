@@ -101,6 +101,21 @@ async function isRevoked(name) {
   }
 }
 
+/** Термін дії пропозиції: data/expiry.json — { назва: "РРРР-ММ-ДД" } (останній день, коли ще відкривається). */
+async function expiryOf(name) {
+  try {
+    const res = await fetch('data/expiry.json', { cache: 'no-cache' });
+    if (!res.ok) return null;
+    const map = await res.json();
+    const d = map && map[name];
+    return /^\d{4}-\d{2}-\d{2}$/.test(d || '') ? d : null;
+  } catch {
+    return null;
+  }
+}
+const isExpired = (d) => !!d && new Date(`${d}T23:59:59`) < new Date();
+const uaDate = (d) => d.split('-').reverse().join('.');
+
 function showError(message) {
   $('title').textContent = 'Помилка';
   $('loader').classList.add('done');
@@ -134,6 +149,16 @@ async function main() {
     $('loader-fill').style.width = total ? `${Math.min(100, (got / total) * 100)}%` : '60%';
     $('loader-text').textContent = total ? `${mb(got)} / ${mb(total)} МБ` : `${mb(got)} МБ`;
   };
+
+  // Термін дії пропозиції минув — модель не показуємо, менеджеру сигнал «клієнт повернувся»
+  const expiry = SHOT ? null : await expiryOf(name);
+  if (isExpired(expiry)) {
+    $('loader').classList.add('done');
+    showError(`Термін дії цієї пропозиції минув ${uaDate(expiry)}. Ціни могли змінитися — напишіть менеджеру М3 Меблі @${MANAGER_TELEGRAM}, і ми оновимо пропозицію.`);
+    $('title').textContent = 'Пропозиція завершилась';
+    notify('expired', name, name, tg);
+    return;
+  }
 
   // Модель могли щойно надіслати, а сайт ще оновлюється (~1 хв): не показуємо помилку одразу,
   // а чекаємо до 3 хв і пробуємо знову
@@ -572,6 +597,12 @@ async function main() {
     // «Відмовитись»: клієнт одним тапом вибирає причину — менеджеру сповіщення з нею
     const declineBtn = $('decline');
     declineBtn.hidden = false;
+    // Термін дії пропозиції — над кнопкою
+    if (expiry) {
+      const chip = $('valid');
+      chip.textContent = `Ціна дійсна до ${uaDate(expiry)}`;
+      chip.hidden = false;
+    }
     declineBtn.addEventListener('click', () => {
       const body = document.createElement('div');
       body.className = 'order-sheet';
@@ -581,11 +612,22 @@ async function main() {
       let close = () => {};
       const send = async (reason) => {
         body.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+        // «Дорого» — бот напише клієнту пропозицію підібрати дешевший варіант (потрібен дозвіл писати)
+        if (reason === 'Дорого') await askWrite();
         const res = await notify('decline', name, $('title').textContent, tg, reason);
         body.replaceChildren(msg);
-        msg.textContent = res && res.ok
-          ? 'Дякуємо, що переглянули проєкт! Якщо передумаєте — ми на зв\'язку.'
-          : `Не вдалося надіслати. Напишіть, будь ласка, менеджеру: @${MANAGER_TELEGRAM}`;
+        if (res && res.client === 'sent') {
+          msg.innerHTML = 'Розуміємо! Ми можемо підібрати <b>дешевші матеріали чи фурнітуру</b> — вигляд майже не зміниться.<br><br>У чаті з ботом М3 вже є повідомлення з кнопкою «Написати менеджеру».';
+          body.append(sheetBtn('Перейти в чат', () => {
+            try { tg.disableClosingConfirmation && tg.disableClosingConfirmation(); tg.close(); } catch { /* немає */ }
+          }, true));
+          return;
+        }
+        msg.textContent = !(res && res.ok)
+          ? `Не вдалося надіслати. Напишіть, будь ласка, менеджеру: @${MANAGER_TELEGRAM}`
+          : reason === 'Дорого'
+            ? `Розуміємо! Ми можемо підібрати дешевші матеріали чи фурнітуру — вигляд майже не зміниться. Напишіть менеджеру @${MANAGER_TELEGRAM}, і ми порахуємо варіант.`
+            : 'Дякуємо, що переглянули проєкт! Якщо передумаєте — ми на зв\'язку.';
         body.append(sheetBtn('Закрити', () => close(), true));
       };
       for (const r of ['Дорого', 'Обрали іншого виконавця', 'Повернемось пізніше']) {

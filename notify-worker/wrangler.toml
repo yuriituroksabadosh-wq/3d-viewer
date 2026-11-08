@@ -9,3 +9,7 @@ enabled = true
 [[kv_namespaces]]
 binding = "M3"
 id = "0441ff227911422183a5bf31d4eea1a2"
+
+# Щодня о 07:00 UTC (10:00 Київ взимку) — нагадування «клієнт мовчить»
+[triggers]
+crons = ["0 7 * * *"]

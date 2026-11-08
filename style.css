@@ -479,6 +479,7 @@ body.shot #stage { position: fixed; inset: 0; min-height: 0; }
   #toolbar .tool-cap { font-size: 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #viewcube { top: auto; bottom: 8px; right: 8px; transform: scale(0.85); transform-origin: bottom right; }
   .watermark { right: auto; left: 10px; bottom: 10px; }
+  body .order-bar { left: 50%; transform: translateX(-50%); }
 }
 
 /* Темна тема Telegram: невибрані плитки беруть кольори теми (інакше темний текст на темному фоні) */
@@ -517,7 +518,10 @@ body.shot #stage { position: fixed; inset: 0; min-height: 0; }
 .dim-label.dim-chain { border-color: #a8834c; color: #6b4f24; font-size: 11px; }
 
 /* Кнопка «Замовити» — внизу зліва на сцені */
-.order-bar { position: absolute; left: 12px; bottom: 12px; z-index: 3; display: flex; gap: 8px; }
+.order-bar { position: absolute; left: 12px; bottom: 6px; z-index: 3; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.valid-chip { padding: 3px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.85); color: #6b4f24; font-size: 12px; font-weight: 600; }
+.valid-chip[hidden], .decline-link[hidden] { display: none; }
+.decline-link { border: 0; background: none; padding: 2px 8px; color: #8a8f96; font: inherit; font-size: 12px; text-decoration: underline; cursor: pointer; }
 body.shot .order-bar { display: none !important; }
 .order-btn {
   display: inline-flex; align-items: center; gap: 7px;
@@ -530,7 +534,6 @@ body.shot .order-bar { display: none !important; }
 .order-btn svg { width: 20px; height: 20px; }
 .order-btn:active { transform: scale(0.97); }
 body.shot .order-btn { display: none !important; }
-.order-btn.decline-btn { background: rgba(255, 255, 255, 0.92); color: #6b4f24; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12); padding: 0 16px; }
 .order-sheet .btn.reason { min-height: 44px; }
 .order-sheet .btn[hidden] { display: none; }
 .reason-text { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text); font: inherit; font-size: 16px; resize: none; }

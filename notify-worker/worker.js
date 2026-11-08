@@ -1,28 +1,40 @@
-// Cloudflare Worker: сайт 3D-перегляду повідомляє сюди, що клієнт відкрив модель / КП / натиснув «Замовити»,
-// а воркер пише про це менеджеру в Telegram від імені бота. Токен бота — лише тут (секрет BOT_TOKEN),
-// на сайт він не потрапляє. Секрети: BOT_TOKEN, CHAT_ID.
+// Cloudflare Worker: сайт 3D-перегляду повідомляє сюди, що клієнт відкрив модель / КП / натиснув «Замовити»
+// чи «Відмовитись», а воркер пише про це менеджеру в Telegram від імені бота. Токен бота — лише тут
+// (секрет BOT_TOKEN), на сайт він не потрапляє. Секрети: BOT_TOKEN, CHAT_ID, REVOKE_KEY, WEBHOOK_SECRET.
 //
 // «Замовити»: з міні-апки Telegram (iPhone) не пускає клієнта в особистий чат з людиною.
 // Тому заявка йде через бота: менеджеру — повідомлення про заявку, клієнту (якщо дозволив боту писати) —
 // повідомлення в чаті з ботом з кнопкою «Написати менеджеру» (кнопка-посилання в чаті відкриває чат завжди).
 // Хто клієнт — беремо лише з підписаних Telegram даних (initData), щоб бота не можна було змусити писати чужим.
+//
+// Також:
+//  • статистика по кожній моделі в KV (stat:<назва>) — відкриття, КП, заявка, відмова;
+//  • щодня о 10:00 (Київ) — нагадування «клієнт мовчить», якщо 3 дні тому відкрив і нічого не натиснув;
+//  • вебхук бота (/tg): менеджер пише «стат 46» або /stat — бот відповідає статистикою;
+//    повідомлення клієнтів боту пересилаються менеджеру.
 
 const ALLOWED_ORIGINS = ['https://yuriituroksabadosh-wq.github.io', 'http://localhost:5173'];
 const MANAGER = 'turok_yura';
+const SILENT_DAYS = 3;
 const EVENTS = {
   open: '👀 Відкрили 3D-модель',
   kp: '📄 Відкрили КП',
   order: '🛒 ЗАЯВКА: хоче замовити',
   decline: '❌ Відмовився від проєкту',
+  expired: '⌛ Відкрили прострочену пропозицію — клієнт повернувся!',
 };
+const managerBtn = { inline_keyboard: [[{ text: '✉️ Написати менеджеру', url: `https://t.me/${MANAGER}` }]] };
 
 const cors = (origin) => ({
   'Access-Control-Allow-Origin': ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 });
+const json = (obj, headers = {}) => new Response(JSON.stringify(obj), { headers: { ...headers, 'Content-Type': 'application/json' } });
 
 const clean = (s, n = 60) => String(s ?? '').replace(/[<>&\u0000-\u001f]/g, ' ').trim().slice(0, n);
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const when = (ms) => new Date(ms).toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
 /** Перевірка підпису Telegram WebApp initData. Повертає користувача або null. */
 async function verifiedUser(initData, botToken) {
@@ -52,6 +64,7 @@ const tgApi = (env, method, body) => fetch(`https://api.telegram.org/bot${env.BO
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
 }).then((r) => r.json()).catch(() => ({ ok: false }));
+const toManager = (env, text, quiet = false) => tgApi(env, 'sendMessage', { chat_id: env.CHAT_ID, text, parse_mode: 'HTML', disable_notification: quiet, disable_web_page_preview: true });
 
 const STALE = 'Ця пропозиція від М3 Меблі більше не актуальна. З питаннями — звертайтеся до менеджера.';
 
@@ -65,6 +78,58 @@ async function retract(env, chat, id) {
   return c.ok ? 'edited' : `fail: ${c.description || t.description || del.description || ''}`;
 }
 
+/** Запам'ятати повідомлення бота клієнту — щоб відміна проєкту могла його прибрати. */
+async function rememberMsg(env, model, chat, id) {
+  if (!env.M3) return;
+  const k = `msg:${model}`;
+  const list = JSON.parse((await env.M3.get(k)) || '[]');
+  list.push({ chat, id });
+  await env.M3.put(k, JSON.stringify(list.slice(-200)));
+}
+
+// ---------- Статистика ----------
+async function getStat(env, model) {
+  return env.M3 ? JSON.parse((await env.M3.get(`stat:${model}`)) || 'null') : null;
+}
+async function bumpStat(env, model, what, event, reason, uid) {
+  if (!env.M3) return null;
+  const now = Date.now();
+  const s = (await getStat(env, model)) || { title: what, opens: 0, kp: 0, orders: 0, declines: 0, expired: 0, first: now, last: now, viewers: [] };
+  if (what && what !== model) s.title = what;
+  if (event === 'open') s.opens++;
+  if (event === 'kp') s.kp++;
+  if (event === 'order') s.orders++;
+  if (event === 'decline') { s.declines++; s.reason = reason || ''; }
+  if (event === 'expired') s.expired++;
+  if (event === 'open' || event === 'kp') s.last = now;
+  if (uid && !s.viewers.includes(uid)) s.viewers = [...s.viewers, uid].slice(-20);
+  await env.M3.put(`stat:${model}`, JSON.stringify(s));
+  return s;
+}
+const statText = (model, s) => [
+  `📊 <b>${esc(s.title || model)}</b>`,
+  `Відкриття: ${s.opens} · КП: ${s.kp} · людей: ${s.viewers.length || '?'}`,
+  `Заявка: ${s.orders ? 'так ✅' : 'ні'}${s.declines ? ` · Відмова ❌ ${esc(s.reason || '')}` : ''}${s.expired ? ` · після терміну: ${s.expired}` : ''}`,
+  `Вперше: ${when(s.first)} · востаннє: ${when(s.last)}`,
+].join('\n');
+
+/** Щоденно: хто відкрив ≥3 дні тому і мовчить — нагадати менеджеру (один раз на модель). */
+async function remindSilent(env) {
+  if (!env.M3) return;
+  const keys = await env.M3.list({ prefix: 'stat:' });
+  for (const { name } of keys.keys) {
+    const model = name.slice(5);
+    const s = await getStat(env, model);
+    if (!s || s.reminded || s.orders || s.declines) continue;
+    if (Date.now() - s.first < SILENT_DAYS * 86400e3) continue;
+    if (await env.M3.get(`revoked:${model}`)) continue;
+    const r = await toManager(env, [`🤔 <b>Клієнт мовчить</b> вже ${Math.floor((Date.now() - s.first) / 86400e3)} дн.`, statText(model, s), '', 'Час дзвонити!'].join('\n'));
+    if (r.ok) { s.reminded = Date.now(); await env.M3.put(name, JSON.stringify(s)); }
+    console.log(JSON.stringify({ remind: model, ok: r.ok }));
+  }
+}
+
+// ---------- Відміна проєкту ----------
 /** Відміна проєкту (з комп'ютера менеджера, з ключем): прибрати всі повідомлення бота клієнтам по цій моделі. */
 async function revoke(request, env) {
   if (!env.REVOKE_KEY || request.headers.get('X-M3-Key') !== env.REVOKE_KEY) return new Response('Forbidden', { status: 403 });
@@ -78,90 +143,147 @@ async function revoke(request, env) {
   await env.M3.delete(`msg:${slug}`);
   await env.M3.put(`revoked:${slug}`, new Date().toISOString());
   console.log(JSON.stringify({ revoke: slug, results }));
-  return new Response(JSON.stringify({ ok: true, results }), { headers: { 'Content-Type': 'application/json' } });
+  return json({ ok: true, results });
+}
+
+// ---------- Бот: команди менеджера і повідомлення клієнтів ----------
+async function onUpdate(request, env) {
+  if (!env.WEBHOOK_SECRET || request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.WEBHOOK_SECRET) {
+    return new Response('Forbidden', { status: 403 });
+  }
+  let upd;
+  try { upd = await request.json(); } catch { return new Response('ok'); }
+  const m = upd.message;
+  if (!m || !m.chat || m.chat.type !== 'private') return new Response('ok');
+  const text = (m.text || '').trim();
+  const reply = (t, extra = {}) => tgApi(env, 'sendMessage', { chat_id: m.chat.id, text: t, parse_mode: 'HTML', disable_web_page_preview: true, ...extra });
+
+  // Менеджер
+  if (String(m.from.id) === String(env.CHAT_ID)) {
+    const cmd = /^\/?(stat|стат|статистика)(?:@\w+)?\s*([a-zA-Z0-9-]*)/i.exec(text);
+    if (cmd) {
+      const q = cmd[2];
+      const keys = (await env.M3.list({ prefix: 'stat:' })).keys.map((k) => k.name.slice(5));
+      if (q) {
+        const found = keys.filter((k) => k === q || k.endsWith(`-${q}`));
+        if (!found.length) { await reply(`Статистики по «${esc(q)}» немає — модель ще ніхто не відкривав.`); return new Response('ok'); }
+        for (const k of found) await reply(statText(k, await getStat(env, k)));
+      } else {
+        const all = (await Promise.all(keys.map(async (k) => [k, await getStat(env, k)]))).filter(([, s]) => s)
+          .sort((a, b) => b[1].last - a[1].last).slice(0, 10);
+        await reply(all.length
+          ? all.map(([k, s]) => `<b>${esc(s.title || k)}</b> — 👀 ${s.opens} · 📄 ${s.kp}${s.orders ? ' · ✅ заявка' : ''}${s.declines ? ' · ❌ відмова' : ''} · ${when(s.last)}`).join('\n')
+            + '\n\nДетально: «стат 46»'
+          : 'Поки що ніхто нічого не відкривав.');
+      }
+      return new Response('ok');
+    }
+    await reply('Команди:\n• <b>стат</b> — останні 10 проєктів\n• <b>стат 46</b> — детально по замовленню №46');
+    return new Response('ok');
+  }
+
+  // Клієнт: /start — привітання; інше — передаємо менеджеру
+  if (/^\/start\b/.test(text)) {
+    await reply('Вітаємо! Це бот М3 Меблі 🙂\nТут з\'являтимуться ваші 3D-проєкти. З будь-яким питанням — пишіть менеджеру.', { reply_markup: managerBtn });
+    return new Response('ok');
+  }
+  const f = m.from;
+  const who = [`<a href="tg://user?id=${f.id}">${esc([f.first_name, f.last_name].filter(Boolean).join(' ') || 'клієнт')}</a>`, f.username ? `@${esc(f.username)}` : ''].filter(Boolean).join(' ');
+  let r = await toManager(env, `💬 Клієнт написав боту\nХто: ${who}\n\n${text ? esc(text.slice(0, 3000)) : '(фото/файл — пересилаю нижче)'}`);
+  if (!r.ok) r = await toManager(env, `💬 Клієнт написав боту\nХто: ${esc(f.first_name || '')} ${f.username ? '@' + esc(f.username) : ''} (id ${f.id})\n\n${text ? esc(text.slice(0, 3000)) : '(фото/файл — пересилаю нижче)'}`);
+  if (!text) await tgApi(env, 'forwardMessage', { chat_id: env.CHAT_ID, from_chat_id: m.chat.id, message_id: m.message_id });
+  await reply('Дякуємо! Передали ваше повідомлення менеджеру — він відповість найближчим часом.', { reply_markup: managerBtn });
+  return new Response('ok');
+}
+
+// ---------- Події з сайту ----------
+async function onEvent(request, env) {
+  const origin = request.headers.get('Origin') || '';
+  if (request.method === 'OPTIONS') return new Response(null, { headers: cors(origin) });
+  if (request.method !== 'POST' || !ALLOWED_ORIGINS.includes(origin)) {
+    return new Response('Forbidden', { status: 403 });
+  }
+  let data;
+  try {
+    data = await request.json();
+  } catch {
+    return new Response('Bad request', { status: 400, headers: cors(origin) });
+  }
+  const event = EVENTS[data.event];
+  const model = clean(data.model, 64);
+  if (!event || !/^[a-zA-Z0-9-]{1,64}$/.test(model)) {
+    return new Response('Bad request', { status: 400, headers: cors(origin) });
+  }
+
+  // Клієнт: перевірений підписом Telegram (якщо є initData), інакше — як надіслала сторінка (лише для тексту)
+  const tgUser = await verifiedUser(data.initData, env.BOT_TOKEN);
+  const u = tgUser
+    ? { id: tgUser.id, name: [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' '), username: tgUser.username || '' }
+    : (data.user || null);
+  const log = (result) => console.log(JSON.stringify({ event: data.event, model, v: clean(data.v, 20), p: clean(data.p, 30), tg: !!data.telegram, uid: u && u.id, signed: !!tgUser, result }));
+  const ok = (client) => json({ ok: true, client }, cors(origin));
+
+  // Свої відкриття (менеджер дивиться сам) — не повідомляємо і не рахуємо
+  if (u && String(u.id) === String(env.CHAT_ID)) { log('own'); return ok('own'); }
+
+  // Повтори того самого (оновив сторінку) — не частіше разу на 2 хв від одного клієнта.
+  // Ключ — Telegram-користувач, а не IP: інакше вся сім'я на одному Wi-Fi «зливається» в одного.
+  const who = (u && u.id) || request.headers.get('CF-Connecting-IP') || '';
+  const cache = caches.default;
+  const key = new Request(`https://notify.local/${data.event}/${model}/${encodeURIComponent(who)}`);
+  if (await cache.match(key)) { log('repeat'); return ok('repeat'); }
+  await cache.put(key, new Response('1', { headers: { 'Cache-Control': 'max-age=120' } }));
+
+  // «Санвузол · №460» → «№460 · Санвузол»: спершу номер замовлення
+  const parts = clean(data.title, 80).split(' · ').filter(Boolean);
+  let what = parts.length > 1 ? `${parts.slice(1).join(' · ')} · ${parts[0]}` : (parts[0] || model);
+  const uid = u && /^[0-9]{1,15}$/.test(String(u.id)) ? String(u.id) : '';
+  const reasonText = data.event === 'decline' ? clean(data.reason, 300) : '';
+
+  const stat = await bumpStat(env, model, what === model ? '' : what, data.event, reasonText, uid);
+  if (what === model && stat && stat.title) what = stat.title; // прострочена: назви на сторінці немає — беремо зі статистики
+
+  const uname = u ? clean(u.name, 60) : '';
+  const unick = u && u.username ? `@${clean(u.username, 40)}` : '';
+  const whoLine = !u ? `невідомо (${data.telegram ? 'у Telegram' : 'у браузері'})`
+    : [uid ? `<a href="tg://user?id=${uid}">${uname || 'клієнт'}</a>` : uname, unick].filter(Boolean).join(' ');
+  const reason = reasonText ? `Причина: ${reasonText}` : '';
+  const counts = stat && data.event !== 'open' ? `👀 ${stat.opens} · 📄 ${stat.kp}` : '';
+
+  // Клікабельне ім'я Telegram приймає не для кожного клієнта — тоді шлемо без посилання
+  const quiet = data.event === 'open';
+  let res = await toManager(env, [event, `<b>${what}</b>`, `Хто: ${whoLine}`, reason, counts].filter(Boolean).join('\n'), quiet);
+  if (!res.ok) {
+    const plain = !u ? whoLine : [uname, unick, uid ? `(id ${uid})` : ''].filter(Boolean).join(' ');
+    res = await toManager(env, [event, `<b>${what}</b>`, `Хто: ${plain}`, reason, counts].filter(Boolean).join('\n'), quiet);
+  }
+
+  // Клієнту в чат з ботом (лише перевіреному): після «Замовити» і після відмови «Дорого»
+  let clientText = '';
+  if (data.event === 'order') {
+    clientText = `Дякуємо! Вашу заявку на «${what}» передано менеджеру.\n\nМенеджер напише вам найближчим часом. Або напишіть самі — натисніть кнопку нижче.`;
+  } else if (data.event === 'decline' && reasonText === 'Дорого') {
+    clientText = `Дякуємо, що переглянули «${what}»!\n\nМи можемо підібрати дешевші матеріали чи фурнітуру — вигляд майже не зміниться, а ціна стане приємнішою. Напишіть менеджеру — порахуємо варіант під ваш бюджет.`;
+  }
+  let toClient = null;
+  if (clientText && tgUser && uid) {
+    const r = await tgApi(env, 'sendMessage', { chat_id: uid, text: clientText, reply_markup: managerBtn });
+    toClient = r.ok ? 'sent' : `fail: ${r.description || ''}`;
+    if (r.ok) await rememberMsg(env, model, uid, r.result.message_id);
+  }
+
+  log(`${res.ok ? 'sent' : `fail: ${res.description || ''}`}${toClient ? ` / client: ${toClient}` : ''}`);
+  return json({ ok: !!res.ok, client: toClient }, cors(origin));
 }
 
 export default {
   async fetch(request, env) {
-    if (new URL(request.url).pathname === '/revoke' && request.method === 'POST') return revoke(request, env);
-    const origin = request.headers.get('Origin') || '';
-    if (request.method === 'OPTIONS') return new Response(null, { headers: cors(origin) });
-    if (request.method !== 'POST' || !ALLOWED_ORIGINS.includes(origin)) {
-      return new Response('Forbidden', { status: 403 });
-    }
-    let data;
-    try {
-      data = await request.json();
-    } catch {
-      return new Response('Bad request', { status: 400, headers: cors(origin) });
-    }
-    const event = EVENTS[data.event];
-    const model = clean(data.model, 64);
-    if (!event || !/^[a-zA-Z0-9-]{1,64}$/.test(model)) {
-      return new Response('Bad request', { status: 400, headers: cors(origin) });
-    }
-
-    // Клієнт: перевірений підписом Telegram (якщо є initData), інакше — як надіслала сторінка (лише для тексту)
-    const tgUser = await verifiedUser(data.initData, env.BOT_TOKEN);
-    const u = tgUser
-      ? { id: tgUser.id, name: [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' '), username: tgUser.username || '' }
-      : (data.user || null);
-    const log = (result) => console.log(JSON.stringify({ event: data.event, model, v: clean(data.v, 20), p: clean(data.p, 30), tg: !!data.telegram, uid: u && u.id, signed: !!tgUser, result }));
-
-    // Свої відкриття (менеджер дивиться сам) — не повідомляємо
-    if (u && String(u.id) === String(env.CHAT_ID)) { log('own'); return new Response('{"ok":true,"client":"own"}', { headers: { ...cors(origin), 'Content-Type': 'application/json' } }); }
-
-    // Повтори того самого (оновив сторінку) — не частіше разу на 2 хв від одного клієнта.
-    // Ключ — Telegram-користувач, а не IP: інакше вся сім'я на одному Wi-Fi «зливається» в одного.
-    const who = (u && u.id) || request.headers.get('CF-Connecting-IP') || '';
-    const cache = caches.default;
-    const key = new Request(`https://notify.local/${data.event}/${model}/${encodeURIComponent(who)}`);
-    if (await cache.match(key)) { log('repeat'); return new Response('{"ok":true,"client":"repeat"}', { headers: { ...cors(origin), 'Content-Type': 'application/json' } }); }
-    await cache.put(key, new Response('1', { headers: { 'Cache-Control': 'max-age=120' } }));
-
-    // «Санвузол · №460» → «№460 · Санвузол»: спершу номер замовлення
-    const parts = clean(data.title, 80).split(' · ').filter(Boolean);
-    const what = parts.length > 1 ? `${parts.slice(1).join(' · ')} · ${parts[0]}` : (parts[0] || model);
-    const uid = u && /^[0-9]{1,15}$/.test(String(u.id)) ? String(u.id) : '';
-    const uname = u ? clean(u.name, 60) : '';
-    const unick = u && u.username ? `@${clean(u.username, 40)}` : '';
-    const whoLine = !u ? `невідомо (${data.telegram ? 'у Telegram' : 'у браузері'})`
-      : [uid ? `<a href="tg://user?id=${uid}">${uname || 'клієнт'}</a>` : uname, unick].filter(Boolean).join(' ');
-
-    const api = (method, body) => fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }).then((r) => r.json()).catch(() => ({ ok: false }));
-    const toManager = (text) => api('sendMessage', { chat_id: env.CHAT_ID, text, parse_mode: 'HTML', disable_notification: data.event === 'open' });
-
-    // Клікабельне ім'я Telegram приймає не для кожного клієнта — тоді шлемо без посилання
-    const reason = data.event === 'decline' && data.reason ? `Причина: ${clean(data.reason, 300)}` : '';
-    let res = await toManager([event, `<b>${what}</b>`, `Хто: ${whoLine}`, reason].filter(Boolean).join('\n'));
-    if (!res.ok) {
-      const plain = !u ? whoLine : [uname, unick, uid ? `(id ${uid})` : ''].filter(Boolean).join(' ');
-      res = await toManager([event, `<b>${what}</b>`, `Хто: ${plain}`, reason].filter(Boolean).join('\n'));
-    }
-
-    // Заявка: клієнту — повідомлення з кнопкою в чат менеджера (лише перевіреному клієнту)
-    let toClient = null;
-    if (data.event === 'order' && tgUser && uid) {
-      const r = await api('sendMessage', {
-        chat_id: uid,
-        text: `Дякуємо! Вашу заявку на «${what}» передано менеджеру.\n\nМенеджер напише вам найближчим часом. Або напишіть самі — натисніть кнопку нижче.`,
-        reply_markup: { inline_keyboard: [[{ text: '✉️ Написати менеджеру', url: `https://t.me/${MANAGER}` }]] },
-      });
-      toClient = r.ok ? 'sent' : `fail: ${r.description || ''}`;
-      // Запам'ятовуємо, щоб при відміні проєкту прибрати це повідомлення в клієнта
-      if (r.ok && env.M3) {
-        const k = `msg:${model}`;
-        const list = JSON.parse((await env.M3.get(k)) || '[]');
-        list.push({ chat: uid, id: r.result.message_id });
-        await env.M3.put(k, JSON.stringify(list.slice(-200)));
-      }
-    }
-
-    log(`${res.ok ? 'sent' : `fail: ${res.description || ''}`}${toClient ? ` / client: ${toClient}` : ''}`);
-    return new Response(JSON.stringify({ ok: !!res.ok, client: toClient }), { headers: { ...cors(origin), 'Content-Type': 'application/json' } });
+    const path = new URL(request.url).pathname;
+    if (path === '/revoke' && request.method === 'POST') return revoke(request, env);
+    if (path === '/tg' && request.method === 'POST') return onUpdate(request, env);
+    return onEvent(request, env);
+  },
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(remindSilent(env));
   },
 };

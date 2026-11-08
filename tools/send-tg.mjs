@@ -54,7 +54,11 @@ if (fs.existsSync(keyFile) && fs.existsSync(path.join('data', `${slug}.kp.bin`))
   if (m) { url += `__${m[1]}`; withKp = true; }
 }
 
-const caption = `${title}\n3D-модель${withKp ? ' і комерційна пропозиція' : ''} від М3 Меблі.\n\nНатисніть «Відкрити 3D-модель».`;
+// Термін дії пропозиції (data/expiry.json)
+const expFile = path.join('data', 'expiry.json');
+const exp = fs.existsSync(expFile) ? JSON.parse(fs.readFileSync(expFile, 'utf8'))[slug] : '';
+const validLine = exp ? `\nЦіна дійсна до ${exp.split('-').reverse().join('.')}.` : '';
+const caption = `${title}\n3D-модель${withKp ? ' і комерційна пропозиція' : ''} від М3 Меблі.${validLine}\n\nНатисніть «Відкрити 3D-модель».`;
 const reply_markup = JSON.stringify({ inline_keyboard: [[{ text: 'Відкрити 3D-модель', url }]] });
 
 // ---- Відправка: фото з кнопкою, а якщо прев'ю немає — просто повідомлення ----
