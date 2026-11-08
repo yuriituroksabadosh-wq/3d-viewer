@@ -36,7 +36,7 @@ export default {
       return new Response('Bad request', { status: 400, headers: cors(origin) });
     }
 
-    const log = (result) => console.log(JSON.stringify({ event: data.event, model, v: clean(data.v, 20), tg: !!data.telegram, uid: data.user && data.user.id, result }));
+    const log = (result) => console.log(JSON.stringify({ event: data.event, model, v: clean(data.v, 20), p: clean(data.p, 30), tg: !!data.telegram, uid: data.user && data.user.id, result }));
 
     // Свої відкриття (менеджер дивиться сам) — не повідомляємо
     if (data.user && String(data.user.id) === String(env.CHAT_ID)) { log('own'); return new Response('own', { headers: cors(origin) }); }

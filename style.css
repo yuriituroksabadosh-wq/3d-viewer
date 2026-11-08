@@ -562,3 +562,6 @@ body.shot #stage { margin-bottom: 0; }
 .order-go { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 52px;
   background: linear-gradient(160deg, #d2b07a, #a8834c); border-color: #a8834c; color: #fff; font-size: 16px; }
 .order-go svg { width: 22px; height: 22px; }
+
+a.btn { text-decoration: none; box-sizing: border-box; }
+.order-sheet .btn { flex: none; min-height: 48px; }

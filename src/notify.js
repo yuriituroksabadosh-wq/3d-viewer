@@ -1,7 +1,7 @@
 // Сповіщення менеджеру: клієнт відкрив модель / КП / натиснув «Замовити».
 // Адреса воркера (notify-worker/) — після його розгортання; порожня — нічого не надсилаємо.
 // Мітка версії сторінки: у журналі воркера видно, чи в клієнта свіжа версія, а не закешована Telegram-ом
-export const BUILD = '2026-11-08c';
+export const BUILD = '2026-11-08d';
 export const NOTIFY_URL = 'https://m3-notify.yurii-turok-sabadosh.workers.dev';
 
 /** event: 'open' | 'kp' | 'order'. Тихо ігнорує будь-які помилки. */
@@ -11,6 +11,7 @@ export function notify(event, model, title, tg) {
   const body = {
     event,
     v: BUILD,
+    p: tg ? `${tg.platform || "?"} ${tg.version || "?"}` : "",
     model,
     title,
     telegram: !!(tg && tg.platform && tg.platform !== 'unknown'),

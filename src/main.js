@@ -504,7 +504,13 @@ async function main() {
     const chatUrl = `https://t.me/${MANAGER_TELEGRAM}`;
     function openChat() {
       try {
-        if (inTelegram && tg.openTelegramLink && (!tg.isVersionAtLeast || tg.isVersionAtLeast('6.1'))) { tg.openTelegramLink(chatUrl); return true; }
+        if (inTelegram && tg.openTelegramLink && (!tg.isVersionAtLeast || tg.isVersionAtLeast('6.1'))) {
+          // Підтвердження закриття може блокувати перехід у чат — на мить вимикаємо
+          try { tg.disableClosingConfirmation && tg.disableClosingConfirmation(); } catch { /* немає */ }
+          tg.openTelegramLink(chatUrl);
+          setTimeout(() => { try { tg.enableClosingConfirmation && tg.enableClosingConfirmation(); } catch { /* немає */ } }, 3000);
+          return true;
+        }
         if (inTelegram && tg.openLink) { tg.openLink(chatUrl); return true; }
       } catch { /* далі — звичайне посилання */ }
       const w = window.open(chatUrl, '_blank', 'noopener');
@@ -533,11 +539,22 @@ async function main() {
         <div class="order-msg"></div>`;
       copying.then((ok) => { if (!ok) body.querySelector('p').textContent = 'Відкриваємо чат з менеджером. Напишіть, що готові замовити, — ми одразу відповімо.'; });
       body.querySelector('.order-msg').textContent = text;
-      const go = document.createElement('button');
-      go.type = 'button';
+      // Звичайне посилання: Telegram сам перехоплює натискання на t.me — надійніше за виклик із коду
+      const go = document.createElement('a');
       go.className = 'btn order-go';
+      go.href = chatUrl;
+      go.target = '_blank';
+      go.rel = 'noopener';
       go.innerHTML = ICONS.chat + `<span>Не відкрився? Написати @${MANAGER_TELEGRAM}</span>`;
-      go.addEventListener('click', openChat);
+      // Останній варіант: через браузер (сторінка t.me з кнопкою «Send Message» веде в чат)
+      const viaBrowser = document.createElement('button');
+      viaBrowser.type = 'button';
+      viaBrowser.className = 'btn';
+      viaBrowser.textContent = 'Відкрити чат через браузер';
+      viaBrowser.addEventListener('click', () => {
+        try { if (inTelegram && tg.openLink) { tg.openLink(chatUrl, { try_instant_view: false }); return; } } catch { /* нижче */ }
+        window.open(chatUrl, '_blank', 'noopener');
+      });
       const copy = document.createElement('button');
       copy.type = 'button';
       copy.className = 'btn';
@@ -546,7 +563,7 @@ async function main() {
         try { await navigator.clipboard.writeText(text); copy.textContent = 'Скопійовано — вставте в чат'; }
         catch { window.prompt('Скопіюйте повідомлення:', text); }
       });
-      body.append(go, copy);
+      body.append(go, viaBrowser, copy);
       openSheet('Замовити', body);
     });
   }
