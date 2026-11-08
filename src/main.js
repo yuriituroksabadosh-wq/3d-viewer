@@ -505,10 +505,11 @@ async function main() {
     function openChat() {
       try {
         if (inTelegram && tg.openTelegramLink && (!tg.isVersionAtLeast || tg.isVersionAtLeast('6.1'))) {
-          // Підтвердження закриття може блокувати перехід у чат — на мить вимикаємо
+          // З Bot API 7.0 Telegram відкриває чат ПІД міні-апкою і не закриває її — клієнт чату не бачить.
+          // Тому після переходу закриваємо міні-апку (без підтвердження): клієнт одразу в чаті з менеджером.
           try { tg.disableClosingConfirmation && tg.disableClosingConfirmation(); } catch { /* немає */ }
           tg.openTelegramLink(chatUrl);
-          setTimeout(() => { try { tg.enableClosingConfirmation && tg.enableClosingConfirmation(); } catch { /* немає */ } }, 3000);
+          setTimeout(() => { try { tg.close(); } catch { /* немає */ } }, 600);
           return true;
         }
         if (inTelegram && tg.openLink) { tg.openLink(chatUrl); return true; }
@@ -532,7 +533,8 @@ async function main() {
       // Спершу — копіювання і відкриття чату (поки діє натискання), потім віконце-підстраховка:
       // якщо Telegram чат не відкрив, клієнт бачить кнопку, а не «нічого»
       const copying = copyText(text);
-      openChat();
+      // Чат — після копіювання: міні-апка одразу закривається, текст має встигнути потрапити в буфер
+      copying.finally(() => openChat());
       const body = document.createElement('div');
       body.className = 'order-sheet';
       body.innerHTML = `<p>Відкриваємо чат з менеджером. Вставте текст (він уже скопійований) і надішліть — ми одразу відповімо.</p>
@@ -545,6 +547,7 @@ async function main() {
       go.href = chatUrl;
       go.target = '_blank';
       go.rel = 'noopener';
+      go.addEventListener('click', (e) => { if (inTelegram) { e.preventDefault(); openChat(); } });
       go.innerHTML = ICONS.chat + `<span>Не відкрився? Написати @${MANAGER_TELEGRAM}</span>`;
       // Останній варіант: через браузер (сторінка t.me з кнопкою «Send Message» веде в чат)
       const viaBrowser = document.createElement('button');
