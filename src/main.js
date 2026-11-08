@@ -107,6 +107,7 @@ function showError(message) {
   const box = $('error');
   box.textContent = message;
   box.hidden = false;
+  $('info').replaceChildren(); // «Завантаження моделі…» більше не актуальне
 }
 
 // Режим знімка для прев'ю в боті: ?shot=1 — лише сцена без інтерфейсу, кадр у window.__shot
