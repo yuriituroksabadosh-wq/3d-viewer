@@ -227,15 +227,25 @@ async function main() {
     downAt = null;
     if (moved > 6) return;
     if (ruler.active) return; // натискання забирає лінійка
-    selectPart(model.pick(e.clientX, e.clientY, viewer.camera, canvas));
+    const hit = model.pick(e.clientX, e.clientY, viewer.camera, canvas);
+    if (animMode) {
+      const op = hit && model.openerOf ? model.openerOf(hit) : null;
+      if (op) model.toggleOpener(op);
+      else if (hit) toast($('toast'), 'Це не двері й не шухляда');
+      return;
+    }
+    selectPart(hit);
   });
   info.show(null);
 
   // ---- Панель іконок над сценою (лише для моделей з БАЗИСу) ----
+  // Сканувати · Блок · Анімація · Підсвітка (лампочка, якщо є LED) · Сховати.
+  // «Розібрати» й «Лінійка» — у меню ☰; КП — кнопкою вгорі (у шапці).
   const toolbar = $('toolbar');
   const tools = {};
-  let openOn = false;
+  let animMode = false;   // режим анімації: натискання на фасад відкриває/закриває саме його
   let explodeOn = false;
+  let ledOn = false;
   function tool(id, title, icon, onClick, caption) {
     const b = document.createElement('button');
     b.className = 'tool';
@@ -249,15 +259,33 @@ async function main() {
     return b;
   }
 
+  // Вибір тону підсвітки: три кружечки під панеллю, видно лише коли лампочка увімкнена
+  const tonePicker = document.createElement('div');
+  tonePicker.className = 'tone-picker';
+  tonePicker.hidden = true;
+  const TONES = [['warm', 'Теплий', '#ffc27a'], ['neutral', 'Нейтральний', '#fff2dc'], ['cold', 'Холодний', '#e2ecff']];
+  for (const [id, label, color] of TONES) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tone';
+    b.dataset.tone = id;
+    b.title = label;
+    b.setAttribute('aria-label', `Підсвітка: ${label.toLowerCase()}`);
+    b.style.background = color;
+    b.innerHTML = `<span>${label}</span>`;
+    b.addEventListener('click', () => { model.setLed(true, id); refreshTools(); });
+    tonePicker.append(b);
+  }
+
   function refreshTools() {
     if (!isGlbModel) return;
     tools.block.setAttribute('aria-pressed', String(blockMode));
-    tools.play.setAttribute('aria-pressed', String(openOn));
-    tools.play.innerHTML = (openOn ? ICONS.close : ICONS.open) + `<span class="tool-cap">${openOn ? 'Закрити' : 'Відкрити'}</span>`;
-    tools.play.title = openOn ? 'Закрити двері й шухляди' : 'Відкрити двері й шухляди';
-    tools.explode.setAttribute('aria-pressed', String(explodeOn));
-    tools.explode.innerHTML = ICONS.explode + `<span class="tool-cap">${explodeOn ? 'Зібрати' : 'Розібрати'}</span>`;
-    tools.ruler.setAttribute('aria-pressed', String(ruler.active));
+    tools.anim.setAttribute('aria-pressed', String(animMode));
+    if (tools.led) {
+      tools.led.setAttribute('aria-pressed', String(ledOn));
+      tonePicker.hidden = !ledOn;
+      for (const b of tonePicker.children) b.classList.toggle('active', b.dataset.tone === model.ledTone);
+    }
     const canShow = !current && model.hasHidden;
     tools.hide.innerHTML = (canShow ? ICONS.show : ICONS.hide) + `<span class="tool-cap">${canShow ? 'Показати' : 'Сховати'}</span>`;
     tools.hide.title = canShow ? 'Показати все' : 'Сховати виділене';
@@ -273,15 +301,27 @@ async function main() {
       if (current) selectPart(current); else refreshTools();
       toast($('toast'), blockMode ? 'Вибір блоком: натисніть на будь-яку деталь блоку' : 'Вибір окремої деталі');
     }, 'Блок');
-    tool('play', 'Відкрити двері й шухляди', ICONS.open, () => {
+    tool('anim', 'Анімація: натисніть на фасад, щоб відкрити', ICONS.open, () => {
       const { doors, drawers } = model.openers;
       if (!doors && !drawers) { toast($('toast'), 'У моделі не знайдено дверей на петлях чи шухляд'); return; }
-      openOn = !openOn;
-      model.setOpen(openOn ? 1 : 0);
+      animMode = !animMode;
+      if (animMode) {
+        selectPart(null);
+        toast($('toast'), 'Анімація: натисніть на фасад — він відкриється, ще раз — закриється');
+      } else {
+        model.setOpen(0); // виходячи з режиму, зачиняємо все
+      }
       refreshTools();
-    }, 'Відкрити');
-    tool('explode', 'Розібрати / зібрати', ICONS.explode, () => doExplode(!explodeOn), 'Розібрати');
-    tool('ruler', 'Лінійка (замір)', ICONS.ruler, () => toggleRuler(), 'Лінійка');
+    }, 'Анімація');
+    if (model.hasLed) {
+      tool('led', 'Підсвітка', ICONS.bulb, () => {
+        ledOn = !ledOn;
+        model.setLed(ledOn);
+        viewer.setDim(ledOn);
+        refreshTools();
+      }, 'Підсвітка');
+      toolbar.after(tonePicker);
+    }
     tool('hide', 'Сховати виділене', ICONS.hide, () => {
       if (current) {
         model.hide(selectedParts());
@@ -346,7 +386,7 @@ async function main() {
     },
     onFacadesVisible: (on) => model.setKeyVisible('facade', on),
     onRoomVisible: model.hasRoom ? (on) => { roomShown = on; model.setKeyVisible('room', on); } : null,
-    onKp: openKp ? () => openKp(model.name) : null,
+    onKp: null, // КП — кнопкою вгорі в шапці
     onSpin: (on) => viewer.setSpin(on, roomSpin),
     // Для моделей з БАЗИСу «Розібрати» — на панелі іконок над моделлю; у панелі лише для простих JSON-моделей
     onExplode: isGlbModel ? null : (t) => model.setExplode(t),
@@ -391,6 +431,13 @@ async function main() {
     }
   });
 
+  // ---- КП — кнопкою вгорі (у шапці), лише якщо КП є і посилання з ключем ----
+  if (openKp) {
+    const kpBtn = $('kpbtn');
+    kpBtn.hidden = false;
+    kpBtn.addEventListener('click', () => openKp(model.name));
+  }
+
   // ---- Меню в шапці ----
   const menuBtn = $('menu');
   menuBtn.hidden = false;
@@ -405,13 +452,13 @@ async function main() {
         viewer.focusBox(model.boxOf(selectedParts()));
       }),
     },
+    isGlbModel && { label: 'Розібрати / зібрати', icon: '⤧', onClick: () => doExplode(!explodeOn) },
     {
       label: 'Лінійка (замір)',
       icon: '📏',
       onClick: () => toggleRuler(),
     },
     isGlbModel && { label: 'Показати все', icon: '👁', onClick: () => showAll() },
-    openKp && { label: 'Комерційна пропозиція', icon: '📄', onClick: () => openKp(model.name) },
     { label: 'Інструкція', icon: '?', onClick: () => showHelp() },
   ]);
   const isVisiblePart = (part) => part.meshes ? part.meshes.some((r) => r.mesh.visible) : true;

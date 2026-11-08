@@ -26,10 +26,18 @@ export function createViewer(canvas) {
   pmrem.dispose();
 
   // Світло: м'яке загальне + одне напрямлене для обʼєму
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8178, 0.6));
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x8a8178, 0.6);
+  scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xffffff, 0.9);
   sun.position.set(3000, 5000, 4000);
   scene.add(sun);
+
+  /** Приглушити загальне світло (коли увімкнена LED-підсвітка — щоб її світіння було видно). */
+  function setDim(on) {
+    hemi.intensity = on ? 0.25 : 0.6;
+    sun.intensity = on ? 0.3 : 0.9;
+    scene.environmentIntensity = on ? 0.3 : 0.6;
+  }
 
   // Підлога під виробом (трохи нижче y=0, щоб не було мерехтіння)
   const floor = new THREE.Mesh(
@@ -207,6 +215,7 @@ export function createViewer(canvas) {
     resetView,
     resize,
     tick,
+    setDim,
     intro,
     viewFrom,
     focusBox,

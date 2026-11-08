@@ -485,3 +485,28 @@ body.shot #stage { position: fixed; inset: 0; min-height: 0; }
 .tile:not([aria-pressed="true"]) { border-color: color-mix(in srgb, var(--text) 22%, transparent); }
 :root[data-scheme="dark"] .tile:not([aria-pressed="true"]) { background: color-mix(in srgb, var(--surface) 85%, #ffffff 15%); }
 :root[data-scheme="dark"] .mat-swatch { border-color: color-mix(in srgb, var(--text) 30%, transparent); }
+
+/* КП — кнопка вгорі в шапці */
+.kp-btn {
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  height: 40px; padding: 0 12px; border-radius: 12px;
+  border: 1px solid #a8834c; background: linear-gradient(160deg, #d2b07a, #a8834c); color: #fff;
+  font: inherit; font-weight: 700; cursor: pointer;
+}
+.kp-btn[hidden] { display: none; }
+@media (max-width: 560px) { .kp-btn { padding: 0 9px; } .kp-btn svg { display: none; } }
+
+/* Вибір тону підсвітки: під панеллю іконок */
+.tone-picker {
+  position: absolute; top: 76px; left: 50%; transform: translateX(-50%); z-index: 1;
+  display: flex; gap: 6px; padding: 5px; border-radius: 14px;
+  background: rgba(30, 30, 30, 0.72); backdrop-filter: blur(6px);
+}
+.tone-picker[hidden] { display: none; }
+.tone { display: flex; align-items: center; height: 32px; padding: 0 10px; border: 2px solid transparent; border-radius: 10px; color: #222; font: 600 12px system-ui, sans-serif; cursor: pointer; }
+.tone.active { border-color: #fff; box-shadow: 0 0 0 2px #c9a46a; }
+@media (max-width: 560px) { .tone-picker { top: 66px; } }
+
+/* Кубик орієнтації менший */
+#viewcube { transform: scale(0.72); transform-origin: top right; }
+@media (max-width: 560px) { #viewcube { transform: scale(0.62); transform-origin: bottom right; } }

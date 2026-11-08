@@ -212,8 +212,11 @@ function swatchOf(m) {
 }
 
 /**
- * Шукає, що відкривається. Двері — фасад, біля якого стоять петлі (сторона петель = вісь повороту).
- * Шухляда — фасад без петель, за яким стоять деталі ящика (боки, дно). Ручки й петлі рухаються з фасадом.
+ * Шукає, що відкривається, — незалежно від повороту шафи (Г-, П-подібні кухні, кути).
+ * Для кожного фасаду: вісь товщини = куди він дивиться; «назовні» — бік ручки,
+ * а без ручки — бік, протилежний петлям (для шухляди — протилежний ящику).
+ * Двері: вісь повороту — вздовж сторони з петлями; напрям повороту перевіряємо пробним поворотом
+ * (вільний край має йти назовні). Шухляда: висувається назовні.
  */
 function findOpeners(parts) {
   const by = (re) => parts.filter((p) => p.key !== 'room' && re.test(p.name.title));
@@ -221,11 +224,11 @@ function findOpeners(parts) {
   const handles = by(/ручк/i);
   const boxBits = parts.filter((p) => p.key !== 'facade' && p.key !== 'room' && /ящик|яшик|шухляд/i.test(p.name.title));
   const used = new Set();
-  const inside = (c, b, pad) => c.x > b.min.x - pad && c.x < b.max.x + pad && c.y > b.min.y - pad && c.y < b.max.y + pad;
   const openers = [];
+  const AX = ['x', 'y', 'z'];
+  const unit = (i, s = 1) => new THREE.Vector3(i === 0 ? s : 0, i === 1 ? s : 0, i === 2 ? s : 0);
 
-  // Кожна петля належить лише одному фасаду — найближчому до неї (петля біля стику двох фасадів
-  // інакше «чіплялась» би до обох). Відстань — від центру петлі до габариту фасаду.
+  // Кожна петля належить лише одному фасаду — найближчому до неї
   const facadesList = parts.filter((p) => p.key === 'facade');
   const hingeOwner = new Map();
   for (const hg of hinges) {
@@ -240,62 +243,75 @@ function findOpeners(parts) {
 
   for (const f of facadesList) {
     const b = f.box;
-    // Петлі: у межах фасаду по X/Y, по глибині — трохи за фасадом
+    const s = f.size;
+    // Вісь товщини фасаду (t) і горизонтальна вісь у його площині (u); вертикаль — y
+    const t = s.x <= s.y && s.x <= s.z ? 0 : s.z <= s.y ? 2 : 1;
+    if (t === 1) continue; // горизонтально лежачий «фасад» (кришка тощо) не відчиняємо
+    const u = t === 0 ? 2 : 0;
+    const T = AX[t];
+    const U = AX[u];
+    const inPlane = (c, pad) => c[U] > b.min[U] - pad && c[U] < b.max[U] + pad && c.y > b.min.y - pad && c.y < b.max.y + pad;
+
     const near = hinges.filter((h) => !used.has(h) && hingeOwner.get(h) === f);
-    // Ручки: на фасаді, спереду
-    const hs = handles.filter((h) => !used.has(h) && inside(h.center, b, 10) && h.center.z > b.max.z - 20 && h.center.z < b.max.z + 80);
+    // Ручки: у площині фасаду, не далі ніж 80 мм від нього по товщині (з будь-якого боку)
+    const hs = handles.filter((h) => !used.has(h) && inPlane(h.center, 10)
+      && Math.abs(h.center[T] - f.center[T]) < s[T] / 2 + 80);
+    // Деталі ящика: перекриваються з фасадом у площині, стоять за ним
+    const box = near.length ? [] : boxBits.filter((p) => !used.has(p)
+      && p.box.max[U] > b.min[U] + 10 && p.box.min[U] < b.max[U] - 10
+      && p.center.y > b.min.y - 20 && p.center.y < b.max.y + 20
+      && Math.abs(p.center[T] - f.center[T]) < 700);
+    if (!near.length && !box.length) continue;
+
+    // Куди «назовні»: бік ручки; інакше — від петель / від ящика
+    const avg = (list) => list.reduce((acc, p) => acc + p.center[T], 0) / list.length;
+    let outSign;
+    if (hs.length) outSign = Math.sign(avg(hs) - f.center[T]) || 1;
+    else if (near.length) outSign = -(Math.sign(avg(near) - f.center[T]) || -1);
+    else outSign = -(Math.sign(avg(box) - f.center[T]) || -1);
+    const out = unit(t, outSign);
+    const innerT = f.center[T] - outSign * (s[T] / 2); // внутрішня площина фасаду
 
     if (near.length) {
-      // Де стоять петлі — та сторона й є віссю повороту:
-      //  збоку (ліворуч/праворуч) — звичайні двері, вісь вертикальна;
-      //  внизу — відкидна дверка (вниз на себе), вгорі — підйомна (вгору), вісь горизонтальна
-      const avgX = near.reduce((s, h) => s + h.center.x, 0) / near.length;
-      const avgY = near.reduce((s, h) => s + h.center.y, 0) / near.length;
-      const xs = near.map((h) => h.center.x);
+      const avgU = near.reduce((acc, h) => acc + h.center[U], 0) / near.length;
+      const avgY = near.reduce((acc, h) => acc + h.center.y, 0) / near.length;
+      const us = near.map((h) => h.center[U]);
       const ys = near.map((h) => h.center.y);
-      const spreadX = Math.max(...xs) - Math.min(...xs);
+      const spreadU = Math.max(...us) - Math.min(...us);
       const spreadY = Math.max(...ys) - Math.min(...ys);
-      // Відстань від петель до найближчого краю — у частках розміру фасаду
-      const toSide = Math.min(avgX - b.min.x, b.max.x - avgX) / Math.max(1, f.size.x);
-      const toEdgeY = Math.min(avgY - b.min.y, b.max.y - avgY) / Math.max(1, f.size.y);
-      const horizontal = near.length > 1 ? spreadX > spreadY : toEdgeY < toSide;
-      let op;
+      const toSide = Math.min(avgU - b.min[U], b.max[U] - avgU) / Math.max(1, s[U]);
+      const toEdgeY = Math.min(avgY - b.min.y, b.max.y - avgY) / Math.max(1, s.y);
+      const horizontal = near.length > 1 ? spreadU > spreadY : toEdgeY < toSide;
+
+      const pivot = new THREE.Vector3();
+      pivot[T] = innerT;
+      let axis;
+      let maxDeg;
+      const free = f.center.clone(); // точка на вільному краї — для перевірки напрямку
       if (horizontal) {
         const bottom = avgY < f.center.y;
-        op = {
-          kind: 'door',
-          axis: new THREE.Vector3(1, 0, 0),
-          pivot: new THREE.Vector3(0, bottom ? b.min.y : b.max.y, b.min.z),
-          // нижній край — верх іде на нас і вниз (+кут), верхній край — низ іде на нас і вгору (−кут)
-          sign: bottom ? 1 : -1,
-          maxAngle: THREE.MathUtils.degToRad(bottom ? 88 : 95),
-        };
+        axis = unit(u);
+        pivot.y = bottom ? b.min.y : b.max.y;
+        free.y = bottom ? b.max.y : b.min.y;
+        maxDeg = bottom ? 88 : 95;
       } else {
-        const left = avgX < f.center.x;
-        op = {
-          kind: 'door',
-          axis: new THREE.Vector3(0, 1, 0),
-          pivot: new THREE.Vector3(left ? b.min.x : b.max.x, 0, b.min.z),
-          sign: left ? -1 : 1, // лівий край — вільний правий край іде на нас (−кут), і навпаки
-          maxAngle: THREE.MathUtils.degToRad(95),
-        };
+        const low = avgU < f.center[U];
+        axis = unit(1);
+        pivot[U] = low ? b.min[U] : b.max[U];
+        free[U] = low ? b.max[U] : b.min[U];
+        maxDeg = 95;
       }
-      // Петлі лишаються на ответних планках корпусу (плече петлі закріплене), рухаються лише фасад і ручка
-      openers.push({ ...op, facade: f, parts: [f, ...hs] });
+      // Пробний поворот на +0,3 рад: якщо вільний край пішов назовні — знак «+», інакше «−»
+      const moved = free.clone().sub(pivot).applyAxisAngle(axis, 0.3).add(pivot).sub(free);
+      const sign = moved.dot(out) >= 0 ? 1 : -1;
+      openers.push({ kind: 'door', axis, pivot, sign, maxAngle: THREE.MathUtils.degToRad(maxDeg), dir: out, facade: f, parts: [f, ...hs] });
       near.concat(hs).forEach((p) => used.add(p));
       continue;
     }
 
-    // Деталі ящика: перекриваються з фасадом по X, центр по Y — у межах фасаду, стоять позаду
-    const box = boxBits.filter((p) => !used.has(p)
-      && p.box.max.x > b.min.x + 10 && p.box.min.x < b.max.x - 10
-      && p.center.y > b.min.y - 20 && p.center.y < b.max.y + 20
-      && p.center.z < b.min.z);
-    if (box.length) {
-      const depth = Math.max(...box.map((p) => p.size.z));
-      openers.push({ kind: 'drawer', facade: f, parts: [f, ...box, ...hs], slide: Math.max(150, depth * 0.75) });
-      box.concat(hs).forEach((p) => used.add(p));
-    }
+    const depth = Math.max(...box.map((p) => p.size[T]));
+    openers.push({ kind: 'drawer', dir: out, slide: Math.max(150, depth * 0.75), facade: f, parts: [f, ...box, ...hs] });
+    box.concat(hs).forEach((p) => used.add(p));
   }
   return openers;
 }
@@ -458,7 +474,7 @@ export async function loadGltfModel(buffer, title) {
   for (const op of openers) {
     // Усе, що рухається разом із фасадом, і розбирається разом з ним
     // Шухляда чи двері рухаються цілими: зсув фасаду + додатково вперед, щоб ящик повністю вийшов із корпусу
-    const shared = outwardOf(op.facade).add(new THREE.Vector3(0, 0, op.kind === 'drawer' ? op.slide : 300));
+    const shared = outwardOf(op.facade).add(op.dir.clone().multiplyScalar(op.kind === 'drawer' ? op.slide : 300));
     op.box = new THREE.Box3();
     for (const p of op.parts) op.box.union(p.box);
     for (const p of op.parts) for (const rec of p.meshes) { rec.outward = shared; rec.opener = op; }
@@ -545,13 +561,10 @@ export async function loadGltfModel(buffer, title) {
 
   // Тривалість анімацій у секундах (залежить від часу, а не від частоти кадрів)
   const OPEN_TIME = 1.3;      // одні двері чи шухляда
-  const OPEN_STAGGER = 0.7;   // наступні стартують, коли попередні майже відкрились: по черзі, а не всі разом
   const EXPLODE_TIME = 1.0;   // одна деталь
   const EXPLODE_SPREAD = 1.6; // за цей час «хвиля» розбирання проходить згори донизу
-  // Порядок відкривання: зліва направо, згори вниз
-  openers.sort((a, b) => (a.facade.center.x - b.facade.center.x) || (b.facade.center.y - a.facade.center.y));
-  openers.forEach((op, i) => { op.delay = i * OPEN_STAGGER; });
-  const OPEN_TOTAL = OPEN_TIME + Math.max(0, openers.length - 1) * OPEN_STAGGER;
+  // Кожні двері чи шухляда мають власний стан: 0 — закрито, 1 — відкрито (відкриваються по одному натисканню)
+  for (const op of openers) { op.now = 0; op.target = 0; }
 
   // Розбирання хвилею: згори вниз; деталі, що відкриваються разом з фасадом, рухаються з ним
   const ys = parts.filter((p) => p.key !== 'room').map((p) => p.center.y);
@@ -563,32 +576,28 @@ export async function loadGltfModel(buffer, title) {
 
   let explodeTarget = 0;
   let explodeNow = 0; // 0 … EXPLODE_TOTAL
-  let openTarget = 0;
-  let openClock = 0; // 0 … OPEN_TOTAL
-  const Y = new THREE.Vector3(0, 1, 0);
   const smooth = (t) => t * t * t * (t * (t * 6 - 15) + 10); // м'який старт і м'яка зупинка
   const towards = (now, target, delta) => (now < target ? Math.min(target, now + delta) : Math.max(target, now - delta));
 
   function update(dt = 1 / 60) {
-    const openGoal = openTarget * OPEN_TOTAL;
     const explodeGoal = explodeTarget * EXPLODE_TOTAL;
-    if (explodeNow === explodeGoal && openClock === openGoal) return;
+    const moving = openers.some((op) => op.now !== op.target);
+    if (explodeNow === explodeGoal && !moving) return;
     explodeNow = towards(explodeNow, explodeGoal, dt);
-    openClock = towards(openClock, openGoal, dt);
+    for (const op of openers) op.now = towards(op.now, op.target, dt / OPEN_TIME);
     for (const rec of meshes) {
       if (rec.part.key === 'room') continue; // стіни не рухаємо
       const ex = smooth(Math.min(1, Math.max(0, (explodeNow - rec.part.explodeDelay) / EXPLODE_TIME)));
       const e = rec.outward.clone().multiplyScalar(EXPLODE_FACTOR * ex);
       const op = rec.opener;
-      // При закриванні порядок зворотний: останні відкриті зачиняються першими
-      const ease = op ? smooth(Math.min(1, Math.max(0, (openClock - op.delay) / OPEN_TIME))) : 0;
+      const ease = op ? smooth(op.now) : 0;
       if (op && op.kind === 'door') {
         // Поворот навколо осі петель (вертикальної чи горизонтальної): позиція = pivot + e − R·pivot
         const angle = op.sign * op.maxAngle * ease;
         rec.mesh.quaternion.setFromAxisAngle(op.axis, angle);
         rec.mesh.position.copy(op.pivot).add(e).sub(op.pivot.clone().applyAxisAngle(op.axis, angle));
       } else if (op && op.kind === 'drawer') {
-        rec.mesh.position.copy(rec.home).add(e).add(new THREE.Vector3(0, 0, op.slide * ease));
+        rec.mesh.position.copy(rec.home).add(e).addScaledVector(op.dir, op.slide * ease);
       } else {
         rec.mesh.position.copy(rec.home).add(e);
       }
@@ -624,6 +633,54 @@ export async function loadGltfModel(buffer, title) {
       : null;
   }
 
+  // ---- LED-підсвітка: стрічки («LED…стрічка») і розсіювачі («лінза/розсіювач») ----
+  // Тони: теплий 3000 К, нейтральний 4000 К, холодний 6000 К. Початковий — з назви матеріалу стрічки.
+  const LED_TONES = {
+    warm: { glow: 0xffc27a, light: 0xffa850, power: 900 },
+    neutral: { glow: 0xfff6e8, light: 0xfff1dc, power: 1100 },
+    cold: { glow: 0xd6e6ff, light: 0x9fc2ff, power: 1300 },
+  };
+  let ledOn = false;
+  let ledTone = 'warm';
+  const ledStripMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 3, roughness: 0.4 });
+  const ledLensMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 1.6, roughness: 0.3 });
+  const ledParts = new Set();
+  let stripName = '';
+  for (const rec of meshes) {
+    const n = [].concat(rec.original).map((m) => (m && m.name) || '').join(' ');
+    if (/led|світлодіод|светодиод/i.test(n) && /стрічк|лент|strip|smd/i.test(n)) { rec.led = 'strip'; stripName = stripName || n; }
+    else if (/розсіюв|рассеив|лінза|линза|diffus/i.test(n)) rec.led = 'lens';
+    if (rec.led) ledParts.add(rec.part);
+  }
+  // Тон із назви: «… 3000К» / «тепле», «4000К» / «нейтральне», «6000К» / «холодне»
+  {
+    const k = /([0-9]{4}) *[кk]/i.exec(stripName);
+    if (k) ledTone = Number(k[1]) <= 3500 ? 'warm' : Number(k[1]) <= 5000 ? 'neutral' : 'cold';
+    else if (/холодн/i.test(stripName)) ledTone = 'cold';
+    else if (/нейтрал|денн/i.test(stripName)) ledTone = 'neutral';
+  }
+  const defaultLedTone = ledTone;
+  // Джерело світла біля кожної деталі з підсвіткою (щоб світло падало на полиці й фасади)
+  const ledLights = [];
+  for (const p of ledParts) {
+    const l = new THREE.PointLight(0xffffff, 0, 1100, 1);
+    l.position.copy(p.box.getCenter(new THREE.Vector3()));
+    l.visible = false;
+    group.add(l);
+    ledLights.push(l);
+  }
+  function setLed(on, tone) {
+    ledOn = on;
+    if (tone) ledTone = tone;
+    const t = LED_TONES[ledTone];
+    ledStripMat.color.set(t.glow);
+    ledStripMat.emissive.set(t.glow);
+    ledLensMat.color.set(t.glow);
+    ledLensMat.emissive.set(t.glow);
+    for (const l of ledLights) { l.visible = on; l.color.set(t.light); l.intensity = on ? t.power : 0; }
+    repaint();
+  }
+
   function baseMaterial(rec) {
     if (mode === "lines") return LINES_FILL;
     if (mode === "xray") {
@@ -631,6 +688,8 @@ export async function loadGltfModel(buffer, title) {
       if (rec.part.xrayMat) return rec.part.xrayMat;
       return rec.original;
     }
+    // Увімкнена LED-підсвітка: стрічка й розсіювач світяться обраним тоном
+    if (ledOn && rec.led) return rec.led === 'strip' ? ledStripMat : ledLensMat;
     // Заміна матеріалу для групи (фасади/корпус/стільниця): лише плити й крайки, фурнітура не змінюється
     const ov = rec.part.slot && slotOverride.get(rec.part.slot);
     if (ov && rec.swappable) return ov;
@@ -845,9 +904,20 @@ export async function loadGltfModel(buffer, title) {
       }
       return b;
     },
-    setOpen(t) { openTarget = Math.min(1, Math.max(0, t)); },
+    /** Відкрити (1) або закрити (0) усі двері й шухляди. */
+    setOpen(t) { for (const op of openers) op.target = t ? 1 : 0; },
+    /** Двері чи шухляда, до якої належить деталь (фасад, ручка, бік ящика), або null. */
+    openerOf(part) { return openers.find((op) => op.parts.includes(part)) || null; },
+    /** Відкрити/закрити одну: повертає true, якщо після натискання вона відкривається. */
+    toggleOpener(op) { op.target = op.target ? 0 : 1; return op.target === 1; },
+    get anyOpen() { return openers.some((op) => op.target === 1); },
     openers: { doors: openers.filter((o) => o.kind === 'door').length, drawers: openers.filter((o) => o.kind === 'drawer').length },
     setMaterialColor,
+    /** LED-підсвітка: чи є в моделі, увімкнути/вимкнути, тон (warm | neutral | cold). */
+    hasLed: ledParts.size > 0,
+    get ledTone() { return ledTone; },
+    defaultLedTone,
+    setLed,
     materialSlots: slots,
     materialOptions: options.map((o) => ({ name: o.name, short: o.short, swatch: o.swatch })),
     setSlotMaterial,
