@@ -76,3 +76,11 @@ if (fs.existsSync(photoPath)) {
   })).json();
 }
 console.log(res.ok ? `Надіслано в чат ${chatId}: «${title}»${withKp ? ' (з КП)' : ''}` : `Помилка Telegram: ${res.description}`);
+
+// Запам'ятовуємо картку — щоб «Відміна проєкту» могла її прибрати
+if (res.ok) {
+  const msgFile = path.join('keys', `${slug}.msg.json`);
+  const list = fs.existsSync(msgFile) ? JSON.parse(fs.readFileSync(msgFile, 'utf8')) : [];
+  list.push({ chat: chatId, id: res.result.message_id });
+  fs.writeFileSync(msgFile, JSON.stringify(list, null, 2));
+}

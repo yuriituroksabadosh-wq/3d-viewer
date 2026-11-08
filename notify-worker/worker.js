@@ -46,8 +46,43 @@ async function verifiedUser(initData, botToken) {
   try { return JSON.parse(params.get('user') || 'null'); } catch { return null; }
 }
 
+const tgApi = (env, method, body) => fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+}).then((r) => r.json()).catch(() => ({ ok: false }));
+
+const STALE = 'Ця пропозиція від М3 Меблі більше не актуальна. З питаннями — звертайтеся до менеджера.';
+
+/** Прибрати повідомлення бота: видалити (до 48 год), інакше — переписати на «не актуальна» без кнопок. */
+async function retract(env, chat, id) {
+  const del = await tgApi(env, 'deleteMessage', { chat_id: chat, message_id: id });
+  if (del.ok) return 'deleted';
+  const t = await tgApi(env, 'editMessageText', { chat_id: chat, message_id: id, text: STALE, reply_markup: { inline_keyboard: [] } });
+  if (t.ok) return 'edited';
+  const c = await tgApi(env, 'editMessageCaption', { chat_id: chat, message_id: id, caption: STALE, reply_markup: { inline_keyboard: [] } });
+  return c.ok ? 'edited' : `fail: ${c.description || t.description || del.description || ''}`;
+}
+
+/** Відміна проєкту (з комп'ютера менеджера, з ключем): прибрати всі повідомлення бота клієнтам по цій моделі. */
+async function revoke(request, env) {
+  if (!env.REVOKE_KEY || request.headers.get('X-M3-Key') !== env.REVOKE_KEY) return new Response('Forbidden', { status: 403 });
+  let data;
+  try { data = await request.json(); } catch { return new Response('Bad request', { status: 400 }); }
+  const slug = String(data.slug || '');
+  if (!/^[a-zA-Z0-9-]{1,64}$/.test(slug)) return new Response('Bad request', { status: 400 });
+  const list = JSON.parse((await env.M3.get(`msg:${slug}`)) || '[]');
+  const results = [];
+  for (const m of list) results.push({ ...m, result: await retract(env, m.chat, m.id) });
+  await env.M3.delete(`msg:${slug}`);
+  await env.M3.put(`revoked:${slug}`, new Date().toISOString());
+  console.log(JSON.stringify({ revoke: slug, results }));
+  return new Response(JSON.stringify({ ok: true, results }), { headers: { 'Content-Type': 'application/json' } });
+}
+
 export default {
   async fetch(request, env) {
+    if (new URL(request.url).pathname === '/revoke' && request.method === 'POST') return revoke(request, env);
     const origin = request.headers.get('Origin') || '';
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors(origin) });
     if (request.method !== 'POST' || !ALLOWED_ORIGINS.includes(origin)) {
@@ -115,6 +150,13 @@ export default {
         reply_markup: { inline_keyboard: [[{ text: '✉️ Написати менеджеру', url: `https://t.me/${MANAGER}` }]] },
       });
       toClient = r.ok ? 'sent' : `fail: ${r.description || ''}`;
+      // Запам'ятовуємо, щоб при відміні проєкту прибрати це повідомлення в клієнта
+      if (r.ok && env.M3) {
+        const k = `msg:${model}`;
+        const list = JSON.parse((await env.M3.get(k)) || '[]');
+        list.push({ chat: uid, id: r.result.message_id });
+        await env.M3.put(k, JSON.stringify(list.slice(-200)));
+      }
     }
 
     log(`${res.ok ? 'sent' : `fail: ${res.description || ''}`}${toClient ? ` / client: ${toClient}` : ''}`);

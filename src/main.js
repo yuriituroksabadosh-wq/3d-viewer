@@ -89,6 +89,18 @@ async function loadModel(name, onProgress) {
   return model;
 }
 
+/** Чи відмінено проєкт: data/revoked.json — список назв закритих моделей. */
+async function isRevoked(name) {
+  try {
+    const res = await fetch('data/revoked.json', { cache: 'no-cache' });
+    if (!res.ok) return false;
+    const list = await res.json();
+    return Array.isArray(list) && list.includes(name);
+  } catch {
+    return false;
+  }
+}
+
 function showError(message) {
   $('title').textContent = 'Помилка';
   $('loader').classList.add('done');
@@ -131,6 +143,13 @@ async function main() {
       break;
     } catch (err) {
       const notYet = /\(помилка 404\)|не знайдено/i.test(err.message || '');
+      // Проєкт відмінено (tools/revoke-order.mjs) — не чекаємо публікації, одразу кажемо
+      if (notYet && await isRevoked(name)) {
+        $('loader').classList.add('done');
+        showError('Доступ до цієї 3D-моделі закрито. З питаннями — звертайтеся до М3 Меблі.');
+        $('title').textContent = 'Доступ закрито';
+        return;
+      }
       if (!notYet || attempt >= 18) {
         console.error(err);
         return showError(err.message || 'Не вдалося відкрити модель.');

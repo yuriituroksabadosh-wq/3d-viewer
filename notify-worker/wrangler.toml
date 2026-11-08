@@ -5,3 +5,7 @@ workers_dev = true
 
 [observability]
 enabled = true
+
+[[kv_namespaces]]
+binding = "M3"
+id = "0441ff227911422183a5bf31d4eea1a2"
