@@ -56,13 +56,18 @@ export default {
     const unick = u && u.username ? `@${clean(u.username, 40)}` : '';
     const whoLine = !u ? `невідомо (${data.telegram ? 'у Telegram' : 'у браузері'})`
       : [uid ? `<a href="tg://user?id=${uid}">${uname || 'клієнт'}</a>` : uname, unick].filter(Boolean).join(' ');
-    const text = [event, `<b>${what}</b>`, `Хто: ${whoLine}`].join('\n');
-
-    await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
+    const send = (text) => fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: env.CHAT_ID, text, parse_mode: 'HTML', disable_notification: data.event === 'open' }),
-    });
-    return new Response('ok', { headers: cors(origin) });
+    }).then((r) => r.json()).catch(() => ({ ok: false }));
+
+    // Клікабельне ім'я Telegram приймає не для кожного клієнта — тоді шлемо без посилання
+    let res = await send([event, `<b>${what}</b>`, `Хто: ${whoLine}`].join('\n'));
+    if (!res.ok) {
+      const plain = !u ? whoLine : [uname, unick, uid ? `(id ${uid})` : ''].filter(Boolean).join(' ');
+      res = await send([event, `<b>${what}</b>`, `Хто: ${plain}`].join('\n'));
+    }
+    return new Response(res.ok ? 'ok' : 'fail', { headers: cors(origin) });
   },
 };
