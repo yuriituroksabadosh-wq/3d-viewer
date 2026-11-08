@@ -497,33 +497,12 @@ async function main() {
     const orderBtn = $('order');
     orderBtn.hidden = false;
     orderBtn.innerHTML = ICONS.chat + '<span>Замовити</span>';
-    // «Замовити»: клієнт має потрапити в особистий чат з менеджером.
-    // На iPhone (Telegram API 9.6) openTelegramLink на чат з людиною мовчки ігнорується,
-    // тому основний спосіб — сторінка t.me у вбудованому браузері: вона сама перекидає в чат
-    // (або має кнопку «Send Message»). Запасні: пряме посилання tg:// і openTelegramLink.
-    // Текст звернення копіюємо в буфер — у чаті з людиною Telegram його сам не підставляє.
+    // «Замовити». З міні-апки Telegram (iPhone) не пускає клієнта в особистий чат з людиною — перевірено
+    // всіма способами. Тому заявка йде через бота: клієнт дозволяє боту писати, воркер шле менеджеру заявку,
+    // а клієнту — повідомлення в чаті з ботом з кнопкою «Написати менеджеру» (кнопка в чаті відкриває чат завжди).
+    // У звичайному браузері — просто відкриваємо t.me (там це працює).
     const chatUrl = `https://t.me/${MANAGER_TELEGRAM}`;
-    const tgUrl = `tg://resolve?domain=${MANAGER_TELEGRAM}`;
-    const way1 = () => { // браузер → t.me → чат
-      try { if (inTelegram && tg.openLink) { tg.openLink(chatUrl, { try_instant_view: false }); return; } } catch { /* нижче */ }
-      if (!window.open(chatUrl, '_blank', 'noopener')) window.location.href = chatUrl;
-    };
-    const way2 = () => { window.location.href = tgUrl; }; // схема tg:// — відкриває застосунок Telegram
-    const way3 = () => { // внутрішній перехід Telegram
-      try { if (inTelegram && tg.openTelegramLink) { tg.openTelegramLink(chatUrl); return; } } catch { /* нижче */ }
-      way1();
-    };
-    const orderText = () => `Доброго дня! Ознайомився з 3D-моделлю «${$('title').textContent}», хочу замовити і обговорити деталі.`;
-    async function copyText(text) {
-      try { await navigator.clipboard.writeText(text); return true; } catch { /* нижче — запасний спосіб */ }
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-        document.body.append(ta); ta.select();
-        const ok = document.execCommand('copy'); ta.remove(); return ok;
-      } catch { return false; }
-    }
-    const wayBtn = (label, fn, main) => {
+    const sheetBtn = (label, fn, main) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = main ? 'btn order-go' : 'btn';
@@ -531,23 +510,43 @@ async function main() {
       b.addEventListener('click', fn);
       return b;
     };
-    orderBtn.addEventListener('click', () => {
-      notify('order', name, $('title').textContent, tg);
-      const text = orderText();
-      const copying = copyText(text);
-      copying.finally(() => way1());
+    const askWrite = () => new Promise((resolve) => {
+      try {
+        if (inTelegram && tg.requestWriteAccess && (!tg.isVersionAtLeast || tg.isVersionAtLeast('6.9'))) {
+          tg.requestWriteAccess((granted) => resolve(!!granted));
+          return;
+        }
+      } catch { /* нижче */ }
+      resolve(false);
+    });
+    orderBtn.addEventListener('click', async () => {
       const body = document.createElement('div');
       body.className = 'order-sheet';
-      body.innerHTML = `<p>Відкриваємо чат з менеджером @${MANAGER_TELEGRAM}. Вставте текст (він уже скопійований) і надішліть — ми одразу відповімо.</p>
-        <div class="order-msg"></div>`;
-      copying.then((ok) => { if (!ok) body.querySelector('p').textContent = `Відкриваємо чат з менеджером @${MANAGER_TELEGRAM}. Напишіть, що готові замовити, — ми одразу відповімо.`; });
-      body.querySelector('.order-msg').textContent = text;
-      body.append(
-        wayBtn(`Написати @${MANAGER_TELEGRAM}`, way1, true),
-        wayBtn('Не відкрилось? Спосіб 2', way2),
-        wayBtn('Спосіб 3', way3),
-      );
-      openSheet('Замовити', body);
+      const msg = document.createElement('p');
+      body.append(msg);
+      if (!inTelegram) {
+        notify('order', name, $('title').textContent, tg);
+        msg.textContent = `Напишіть нам у Telegram @${MANAGER_TELEGRAM} — порахуємо, відповімо на питання й узгодимо замір.`;
+        body.append(sheetBtn(`Написати @${MANAGER_TELEGRAM}`, () => window.open(chatUrl, '_blank', 'noopener'), true));
+        openSheet('Замовити', body);
+        return;
+      }
+      msg.textContent = 'Надсилаємо заявку менеджеру…';
+      const close = openSheet('Замовити', body);
+      await askWrite(); // Telegram питає «Дозволити боту писати вам?» — потрібне, щоб бот надіслав кнопку в чат
+      const res = await notify('order', name, $('title').textContent, tg);
+      if (res && res.client === 'sent') {
+        msg.innerHTML = '✅ <b>Заявку надіслано!</b> Менеджер зв\'яжеться з вами найближчим часом.<br><br>У чаті з ботом М3 вже є повідомлення з кнопкою <b>«Написати менеджеру»</b>.';
+        body.append(sheetBtn('Перейти в чат', () => {
+          try { tg.disableClosingConfirmation && tg.disableClosingConfirmation(); tg.close(); } catch { /* немає */ }
+        }, true));
+      } else if (res && res.ok) {
+        msg.innerHTML = '✅ <b>Заявку надіслано!</b> Менеджер напише вам у Telegram найближчим часом.';
+        body.append(sheetBtn('Добре', close, true));
+      } else {
+        msg.textContent = `Не вдалося надіслати заявку. Напишіть, будь ласка, менеджеру в Telegram: @${MANAGER_TELEGRAM}`;
+        body.append(sheetBtn('Закрити', close, true));
+      }
     });
   }
 

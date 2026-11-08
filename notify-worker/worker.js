@@ -1,12 +1,18 @@
 // Cloudflare Worker: сайт 3D-перегляду повідомляє сюди, що клієнт відкрив модель / КП / натиснув «Замовити»,
 // а воркер пише про це менеджеру в Telegram від імені бота. Токен бота — лише тут (секрет BOT_TOKEN),
 // на сайт він не потрапляє. Секрети: BOT_TOKEN, CHAT_ID.
+//
+// «Замовити»: з міні-апки Telegram (iPhone) не пускає клієнта в особистий чат з людиною.
+// Тому заявка йде через бота: менеджеру — повідомлення про заявку, клієнту (якщо дозволив боту писати) —
+// повідомлення в чаті з ботом з кнопкою «Написати менеджеру» (кнопка-посилання в чаті відкриває чат завжди).
+// Хто клієнт — беремо лише з підписаних Telegram даних (initData), щоб бота не можна було змусити писати чужим.
 
 const ALLOWED_ORIGINS = ['https://yuriituroksabadosh-wq.github.io', 'http://localhost:5173'];
+const MANAGER = 'turok_yura';
 const EVENTS = {
   open: '👀 Відкрили 3D-модель',
   kp: '📄 Відкрили КП',
-  order: '🛒 Натиснули «Замовити»',
+  order: '🛒 ЗАЯВКА: хоче замовити',
 };
 
 const cors = (origin) => ({
@@ -16,6 +22,29 @@ const cors = (origin) => ({
 });
 
 const clean = (s, n = 60) => String(s ?? '').replace(/[<>&\u0000-\u001f]/g, ' ').trim().slice(0, n);
+
+/** Перевірка підпису Telegram WebApp initData. Повертає користувача або null. */
+async function verifiedUser(initData, botToken) {
+  if (!initData || typeof initData !== 'string' || initData.length > 4096) return null;
+  const params = new URLSearchParams(initData);
+  const hash = params.get('hash');
+  if (!hash) return null;
+  params.delete('hash');
+  const check = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n');
+  const enc = new TextEncoder();
+  const hmac = async (key, msg) => {
+    const k = await crypto.subtle.importKey('raw', key, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    return new Uint8Array(await crypto.subtle.sign('HMAC', k, enc.encode(msg)));
+  };
+  const secret = await hmac(enc.encode('WebAppData'), botToken);
+  const sig = await hmac(secret, check);
+  const hex = [...sig].map((b) => b.toString(16).padStart(2, '0')).join('');
+  if (hex !== hash) return null;
+  // Не старіше доби
+  const authDate = Number(params.get('auth_date') || 0);
+  if (!authDate || Date.now() / 1000 - authDate > 86400) return null;
+  try { return JSON.parse(params.get('user') || 'null'); } catch { return null; }
+}
 
 export default {
   async fetch(request, env) {
@@ -36,14 +65,19 @@ export default {
       return new Response('Bad request', { status: 400, headers: cors(origin) });
     }
 
-    const log = (result) => console.log(JSON.stringify({ event: data.event, model, v: clean(data.v, 20), p: clean(data.p, 30), tg: !!data.telegram, uid: data.user && data.user.id, result }));
+    // Клієнт: перевірений підписом Telegram (якщо є initData), інакше — як надіслала сторінка (лише для тексту)
+    const tgUser = await verifiedUser(data.initData, env.BOT_TOKEN);
+    const u = tgUser
+      ? { id: tgUser.id, name: [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' '), username: tgUser.username || '' }
+      : (data.user || null);
+    const log = (result) => console.log(JSON.stringify({ event: data.event, model, v: clean(data.v, 20), p: clean(data.p, 30), tg: !!data.telegram, uid: u && u.id, signed: !!tgUser, result }));
 
     // Свої відкриття (менеджер дивиться сам) — не повідомляємо
-    if (data.user && String(data.user.id) === String(env.CHAT_ID)) { log('own'); return new Response('own', { headers: cors(origin) }); }
+    if (u && String(u.id) === String(env.CHAT_ID)) { log('own'); return new Response('own', { headers: cors(origin) }); }
 
     // Повтори того самого (оновив сторінку) — не частіше разу на 2 хв від одного клієнта.
     // Ключ — Telegram-користувач, а не IP: інакше вся сім'я на одному Wi-Fi «зливається» в одного.
-    const who = (data.user && data.user.id) || request.headers.get('CF-Connecting-IP') || '';
+    const who = (u && u.id) || request.headers.get('CF-Connecting-IP') || '';
     const cache = caches.default;
     const key = new Request(`https://notify.local/${data.event}/${model}/${encodeURIComponent(who)}`);
     if (await cache.match(key)) { log('repeat'); return new Response('repeat', { headers: cors(origin) }); }
@@ -52,26 +86,38 @@ export default {
     // «Санвузол · №460» → «№460 · Санвузол»: спершу номер замовлення
     const parts = clean(data.title, 80).split(' · ').filter(Boolean);
     const what = parts.length > 1 ? `${parts.slice(1).join(' · ')} · ${parts[0]}` : (parts[0] || model);
-    // Хто: ім'я — клікабельне (відкриває чат з клієнтом навіть без @ніка), плюс @нік
-    const u = data.user || null;
     const uid = u && /^[0-9]{1,15}$/.test(String(u.id)) ? String(u.id) : '';
     const uname = u ? clean(u.name, 60) : '';
     const unick = u && u.username ? `@${clean(u.username, 40)}` : '';
     const whoLine = !u ? `невідомо (${data.telegram ? 'у Telegram' : 'у браузері'})`
       : [uid ? `<a href="tg://user?id=${uid}">${uname || 'клієнт'}</a>` : uname, unick].filter(Boolean).join(' ');
-    const send = (text) => fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
+
+    const api = (method, body) => fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: env.CHAT_ID, text, parse_mode: 'HTML', disable_notification: data.event === 'open' }),
+      body: JSON.stringify(body),
     }).then((r) => r.json()).catch(() => ({ ok: false }));
+    const toManager = (text) => api('sendMessage', { chat_id: env.CHAT_ID, text, parse_mode: 'HTML', disable_notification: data.event === 'open' });
 
     // Клікабельне ім'я Telegram приймає не для кожного клієнта — тоді шлемо без посилання
-    let res = await send([event, `<b>${what}</b>`, `Хто: ${whoLine}`].join('\n'));
+    let res = await toManager([event, `<b>${what}</b>`, `Хто: ${whoLine}`].join('\n'));
     if (!res.ok) {
       const plain = !u ? whoLine : [uname, unick, uid ? `(id ${uid})` : ''].filter(Boolean).join(' ');
-      res = await send([event, `<b>${what}</b>`, `Хто: ${plain}`].join('\n'));
+      res = await toManager([event, `<b>${what}</b>`, `Хто: ${plain}`].join('\n'));
     }
-    log(res.ok ? 'sent' : `fail: ${res.description || ''}`);
-    return new Response(res.ok ? 'ok' : 'fail', { headers: cors(origin) });
+
+    // Заявка: клієнту — повідомлення з кнопкою в чат менеджера (лише перевіреному клієнту)
+    let toClient = null;
+    if (data.event === 'order' && tgUser && uid) {
+      const r = await api('sendMessage', {
+        chat_id: uid,
+        text: `Дякуємо! Вашу заявку на «${what}» передано менеджеру.\n\nМенеджер напише вам найближчим часом. Або напишіть самі — натисніть кнопку нижче.`,
+        reply_markup: { inline_keyboard: [[{ text: '✉️ Написати менеджеру', url: `https://t.me/${MANAGER}` }]] },
+      });
+      toClient = r.ok ? 'sent' : `fail: ${r.description || ''}`;
+    }
+
+    log(`${res.ok ? 'sent' : `fail: ${res.description || ''}`}${toClient ? ` / client: ${toClient}` : ''}`);
+    return new Response(JSON.stringify({ ok: !!res.ok, client: toClient }), { headers: { ...cors(origin), 'Content-Type': 'application/json' } });
   },
 };
