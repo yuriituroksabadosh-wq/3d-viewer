@@ -46,20 +46,22 @@ export default {
     if (await cache.match(key)) return new Response('ok', { headers: cors(origin) });
     await cache.put(key, new Response('1', { headers: { 'Cache-Control': 'max-age=600' } }));
 
-    const title = clean(data.title, 80);
-    const user = data.user ? clean([data.user.name, data.user.username ? `@${clean(data.user.username, 40)}` : ''].filter(Boolean).join(' '), 80) : '';
-    const where = data.telegram ? 'у Telegram' : 'у браузері';
-    const text = [
-      `${event}`,
-      title ? `«${title}»` : model,
-      `https://yuriituroksabadosh-wq.github.io/3d-viewer/?model=${model}`,
-      user ? `Хто: ${user}` : `Хто: невідомо (${where})`,
-    ].join('\n');
+    // «Санвузол · №460» → «№460 · Санвузол»: спершу номер замовлення
+    const parts = clean(data.title, 80).split(' · ').filter(Boolean);
+    const what = parts.length > 1 ? `${parts.slice(1).join(' · ')} · ${parts[0]}` : (parts[0] || model);
+    // Хто: ім'я — клікабельне (відкриває чат з клієнтом навіть без @ніка), плюс @нік
+    const u = data.user || null;
+    const uid = u && /^[0-9]{1,15}$/.test(String(u.id)) ? String(u.id) : '';
+    const uname = u ? clean(u.name, 60) : '';
+    const unick = u && u.username ? `@${clean(u.username, 40)}` : '';
+    const whoLine = !u ? `невідомо (${data.telegram ? 'у Telegram' : 'у браузері'})`
+      : [uid ? `<a href="tg://user?id=${uid}">${uname || 'клієнт'}</a>` : uname, unick].filter(Boolean).join(' ');
+    const text = [event, `<b>${what}</b>`, `Хто: ${whoLine}`].join('\n');
 
     await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: env.CHAT_ID, text, link_preview_options: { is_disabled: true }, disable_notification: data.event === 'open' }),
+      body: JSON.stringify({ chat_id: env.CHAT_ID, text, parse_mode: 'HTML', disable_notification: data.event === 'open' }),
     });
     return new Response('ok', { headers: cors(origin) });
   },
