@@ -136,7 +136,7 @@ export default {
     const toManager = (text) => api('sendMessage', { chat_id: env.CHAT_ID, text, parse_mode: 'HTML', disable_notification: data.event === 'open' });
 
     // Клікабельне ім'я Telegram приймає не для кожного клієнта — тоді шлемо без посилання
-    const reason = data.event === 'decline' && data.reason ? `Причина: ${clean(data.reason, 60)}` : '';
+    const reason = data.event === 'decline' && data.reason ? `Причина: ${clean(data.reason, 300)}` : '';
     let res = await toManager([event, `<b>${what}</b>`, `Хто: ${whoLine}`, reason].filter(Boolean).join('\n'));
     if (!res.ok) {
       const plain = !u ? whoLine : [uname, unick, uid ? `(id ${uid})` : ''].filter(Boolean).join(' ');

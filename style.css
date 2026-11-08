@@ -532,6 +532,9 @@ body.shot .order-bar { display: none !important; }
 body.shot .order-btn { display: none !important; }
 .order-btn.decline-btn { background: rgba(255, 255, 255, 0.92); color: #6b4f24; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12); padding: 0 16px; }
 .order-sheet .btn.reason { min-height: 44px; }
+.order-sheet .btn[hidden] { display: none; }
+.reason-text { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text); font: inherit; font-size: 16px; resize: none; }
+.reason-text:focus { outline: none; border-color: #a8834c; }
 
 /* Телефон/планшет: панель — висувна шторка знизу. Згорнута — лише вікно деталі,
    модель займає майже весь екран; розгорнута — поверх моделі до 75% висоти. */

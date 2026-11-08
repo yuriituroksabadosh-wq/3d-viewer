@@ -588,11 +588,21 @@ async function main() {
           : `Не вдалося надіслати. Напишіть, будь ласка, менеджеру: @${MANAGER_TELEGRAM}`;
         body.append(sheetBtn('Закрити', () => close(), true));
       };
-      for (const r of ['Дорого', 'Обрали іншого виконавця', 'Передумали', 'Повернемось пізніше', 'Без причини']) {
+      for (const r of ['Дорого', 'Обрали іншого виконавця', 'Повернемось пізніше']) {
         const b = sheetBtn(r, () => send(r));
         b.classList.add('reason');
         body.append(b);
       }
+      // Своя відповідь
+      const own = document.createElement('textarea');
+      own.className = 'reason-text';
+      own.rows = 2;
+      own.maxLength = 300;
+      own.placeholder = 'Або напишіть свою причину…';
+      const ownBtn = sheetBtn('Надіслати', () => { const t = own.value.trim(); if (t) send(t); }, true);
+      ownBtn.hidden = true;
+      own.addEventListener('input', () => { ownBtn.hidden = !own.value.trim(); });
+      body.append(own, ownBtn);
       close = openSheet('Відмовитись', body);
     });
   }
