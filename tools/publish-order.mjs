@@ -32,7 +32,14 @@ const GIT = ['C:/Program Files/Git/cmd/git.exe', 'C:/Program Files/Git/bin/git.e
 const git = (args) => execFileSync(GIT, args, { cwd: ROOT, encoding: 'utf8' });
 
 // ---- 1. Папка замовлення і модель ----
+// Папка: з аргументу або з файла-заявки publish-request.txt (його пише скрипт БАЗИС —
+// так шлях із пробілами й кирилицею не ламається при запуску через cmd)
 let dir = (process.argv[2] || '').replace(/^"|"$/g, '').trim();
+const REQUEST = path.join(ROOT, 'publish-request.txt');
+if (!dir && fs.existsSync(REQUEST)) {
+  dir = fs.readFileSync(REQUEST, 'utf8').replace(/^﻿/, '').trim();
+  fs.rmSync(REQUEST, { force: true });
+}
 if (dir && fs.existsSync(dir) && fs.statSync(dir).isFile()) dir = path.dirname(dir);
 if (!dir || !fs.existsSync(dir)) fail('Не вказано папку замовлення або її не існує: ' + dir);
 log('Папка замовлення: ' + dir);
