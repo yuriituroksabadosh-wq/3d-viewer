@@ -90,12 +90,20 @@ const isFacadeName = (n) => n.startsWith('фасад') || n === 'двері';
 const isRoomName = (n) => n === 'стіна' || n === 'заміри';
 
 // ---- Кріплення, яких немає в .dae: шканти, конфірмати, мініфікси, дюбелі ----
+// shape: профіль (радіус, відстань від точки кріплення) для тіла обертання — як виглядає насправді
+const V2 = (x, y) => new THREE.Vector2(x, y);
 const FASTENER_TYPES = [
-  { re: /шкант/i, color: 0xd9b98a, metal: 0, d: 8, l: 30 },
-  { re: /конфірмат|конфирмат|комформат/i, color: 0x9aa0a6, metal: 0.8, d: 7, l: 50 },
+  // шкант: фаски на торцях
+  { re: /шкант/i, color: 0xd9b98a, metal: 0, d: 8, l: 30,
+    shape: (r, l) => [V2(0, 0), V2(r - 0.8, 0), V2(r, 0.8), V2(r, l - 0.8), V2(r - 0.8, l), V2(0, l)] },
+  // конфірмат: потайний капелюшок Ø10 урівень з пластю, гладка шийка, різьба, гострий кінець
+  { re: /конфірмат|конфирмат|комформат/i, color: 0x9aa0a6, metal: 0.8, d: 7, l: 50,
+    shape: (r, l) => [V2(0, 0), V2(5, 0), V2(5, 1.2), V2(2.6, 3.5), V2(2.6, 10), V2(r, 11), V2(r, l - 3), V2(1, l), V2(0, l)] },
   { re: /мініфікс|минификс/i, color: 0xb7bcc2, metal: 0.8, d: 15, l: 13 },
   { re: /дюбель/i, color: 0xe6e2da, metal: 0, d: 8, l: 30 },
-  { re: /саморіз|саморез|шуруп/i, color: 0x8d9298, metal: 0.8, d: 4, l: 16 },
+  // саморіз: напівпотайний капелюшок Ø2d, гострий кінець
+  { re: /саморіз|саморез|шуруп/i, color: 0x8d9298, metal: 0.8, d: 4, l: 16,
+    shape: (r, l) => [V2(0, 0), V2(2 * r, 0), V2(2 * r, 0.7), V2(r, 2.2), V2(r, l - 2), V2(0.4, l), V2(0, l)] },
 ];
 
 // Мініфікс (Hettich Rastex + болт Twister): у БАЗИСі є лише болт; ексцентрик домальовуємо самі.
@@ -152,6 +160,30 @@ function addMinifix(root, f, boxes, cache) {
   }
 }
 
+// Пластиковий кутник-стяжка Muller Mfix: накладний, у куті між боковиною і полицею (його видно).
+// Перевірено на моделі: точка — ребро стику на нижній пласті полиці, X — уздовж полиці від боковини,
+// Y — униз по боковині, Z — уздовж стику.
+const SURFACE_TIE_RE = /mfix/i;
+function addSurfaceTie(root, f, cache) {
+  if (!cache.tieParts) {
+    const T = 3, A = 20, W = 24; // товщина стінки, полиця кутника, ширина
+    const side = new THREE.BoxGeometry(T, A, W).translate(T / 2, A / 2, 0);
+    const shelf = new THREE.BoxGeometry(A, T, W).translate(A / 2, T / 2, 0);
+    const tri = new THREE.Shape([new THREE.Vector2(0, 0), new THREE.Vector2(A - 1, 0), new THREE.Vector2(0, A - 1)]);
+    const rib = new THREE.ExtrudeGeometry(tri, { depth: 3, bevelEnabled: false }).translate(0, 0, -1.5);
+    cache.tieParts = [side, shelf, rib];
+    cache.tieMat = new THREE.MeshStandardMaterial({ color: 0x1d1f22, metalness: 0, roughness: 0.6, name: 'Пластик чорний' });
+  }
+  const ax = new THREE.Vector3(...f.ax).normalize();
+  const ay = new THREE.Vector3(...(f.ay || [0, -1, 0])).normalize();
+  const az = Array.isArray(f.az) ? new THREE.Vector3(...f.az).normalize() : new THREE.Vector3().crossVectors(ax, ay);
+  const node = new THREE.Object3D();
+  node.name = f.name;
+  new THREE.Matrix4().makeBasis(ax, ay, az).setPosition(...f.p).decompose(node.position, node.quaternion, node.scale);
+  for (const g of cache.tieParts) node.add(new THREE.Mesh(g, cache.tieMat));
+  root.add(node);
+}
+
 function addFasteners(root, list) {
   const cache = new Map();
   const mfCache = {};
@@ -163,6 +195,10 @@ function addFasteners(root, list) {
       addMinifix(root, f, boxes, mfCache);
       continue;
     }
+    if (SURFACE_TIE_RE.test(f.name || '') && Array.isArray(f.p) && Array.isArray(f.ax)) {
+      addSurfaceTie(root, f, mfCache);
+      continue;
+    }
     const type = FASTENER_TYPES.find((t) => t.re.test(f.name || ''));
     if (!type || !Array.isArray(f.p) || !Array.isArray(f.ax)) continue; // решта (ручки, ніжки) вже має геометрію
     // Розмір з назви: «8х30 мм», «6,4х50 мм»
@@ -172,7 +208,10 @@ function addFasteners(root, list) {
     const key = `${type.color}|${d}|${l}`;
     if (!cache.has(key)) {
       cache.set(key, {
-        geo: new THREE.CylinderGeometry(d / 2, d / 2, l, 14),
+        // Тіло обертання від точки кріплення (y = 0) вздовж осі; без профілю — просто циліндр
+        geo: type.shape
+          ? new THREE.LatheGeometry(type.shape(d / 2, l), 16)
+          : new THREE.CylinderGeometry(d / 2, d / 2, l, 14).translate(0, l / 2, 0),
         mat: new THREE.MeshStandardMaterial({ color: type.color, metalness: type.metal, roughness: 0.5, name: f.name }),
       });
     }
@@ -183,7 +222,7 @@ function addFasteners(root, list) {
     node.name = f.name;
     const mesh = new THREE.Mesh(geo, mat);
     mesh.quaternion.setFromUnitVectors(up, axis);
-    mesh.position.set(...f.p).addScaledVector(axis, l / 2); // від точки кріплення вздовж осі
+    mesh.position.set(...f.p); // від точки кріплення вздовж осі
     node.add(mesh);
     root.add(node);
   }
@@ -361,7 +400,7 @@ export async function loadGltfModel(buffer, title) {
     part.group = groups.get(g);
     part.group.parts.push(part);
     // Технічні деталі, яких клієнт зовні не бачить
-    part.technical = TECHNICAL.test(part.name.title);
+    part.technical = TECHNICAL.test(part.name.title) && !SURFACE_TIE_RE.test(part.name.title); // накладний кутник видно
   }
 
   // Злиття: у межах деталі всі сітки з однаковим матеріалом стають однією сіткою у світових координатах.
