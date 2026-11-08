@@ -1,6 +1,6 @@
 // Cloudflare Worker: сайт 3D-перегляду повідомляє сюди, що клієнт відкрив модель / КП / натиснув «Замовити»
 // чи «Відмовитись», а воркер пише про це менеджеру в Telegram від імені бота. Токен бота — лише тут
-// (секрет BOT_TOKEN), на сайт він не потрапляє. Секрети: BOT_TOKEN, CHAT_ID, REVOKE_KEY, WEBHOOK_SECRET.
+// (секрет BOT_TOKEN), на сайт він не потрапляє. Секрети: BOT_TOKEN, CHAT_ID, REVOKE_KEY.
 //
 // «Замовити»: з міні-апки Telegram (iPhone) не пускає клієнта в особистий чат з людиною.
 // Тому заявка йде через бота: менеджеру — повідомлення про заявку, клієнту (якщо дозволив боту писати) —
@@ -147,8 +147,16 @@ async function revoke(request, env) {
 }
 
 // ---------- Бот: команди менеджера і повідомлення клієнтів ----------
+/** Секрет вебхука: HMAC від токена бота — однаково рахують воркер і tools/setup-bot.mjs, окремо зберігати не треба. */
+async function webhookSecret(env) {
+  const enc = new TextEncoder();
+  const k = await crypto.subtle.importKey('raw', enc.encode(env.BOT_TOKEN), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', k, enc.encode('m3-webhook')));
+  return [...sig].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function onUpdate(request, env) {
-  if (!env.WEBHOOK_SECRET || request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== env.WEBHOOK_SECRET) {
+  if (!env.BOT_TOKEN || request.headers.get('X-Telegram-Bot-Api-Secret-Token') !== await webhookSecret(env)) {
     return new Response('Forbidden', { status: 403 });
   }
   let upd;
