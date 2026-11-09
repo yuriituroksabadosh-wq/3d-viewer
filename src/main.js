@@ -10,6 +10,7 @@ import { prepareKp } from './kp.js';
 import { createDims, boxDims, overallDims } from './dims.js';
 import { MANAGER_TELEGRAM } from './contact.js';
 import { notify } from './notify.js';
+import { loadDrill, matchPanel, showDrill } from './drill.js';
 
 // Готові варіанти кольору фасадів (перший пункт — колір/текстура з самого проєкту)
 const FACADE_COLORS = [
@@ -206,6 +207,18 @@ async function main() {
   // ---- Вибір деталі або цілого блоку ----
   let blockMode = false;
   let current = null; // вибрана деталь (для блоку — будь-яка деталь блоку)
+  // Присадка: лише менеджеру (ключ від воркера за підписом Telegram); у клієнта — null, кнопки немає
+  let drillPanels = null;
+  if (isGlbModel && !SHOT) {
+    // Лише локальна перевірка (у зібраний сайт не потрапляє): ?drilltest — тестова присадка з sessionStorage
+    const devDrill = import.meta.env.DEV && new URLSearchParams(location.search).has('drilltest')
+      ? Promise.resolve((() => { try { return JSON.parse(sessionStorage.getItem('drilltest')).panels; } catch { return null; } })())
+      : null;
+    (devDrill || loadDrill(name, tg)).then((p) => {
+      drillPanels = p;
+      if (p) refreshInfo();
+    });
+  }
 
   function refreshInfo() {
     if (!current) {
@@ -230,6 +243,9 @@ async function main() {
       },
       onFocus: () => viewer.focusBox(model.boxOf(selectedParts())),
     } : null;
+    // Присадка (лише менеджеру): деталь шукаємо за габаритом
+    const dp = actions && drillPanels && !blockMode ? matchPanel(drillPanels, current.box) : null;
+    if (dp) actions.drill = { count: (dp.h || []).length, onOpen: () => showDrill(dp) };
     info.show(d, actions);
   }
 

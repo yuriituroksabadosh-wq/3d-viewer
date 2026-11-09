@@ -173,6 +173,7 @@ const scene = root.getDefaultScene() || root.listScenes()[0];
 
 // Параметри виробу з БАЗИСу (скрипт «Експорт для 3D-перегляду» пише m3-viewer.json поруч із моделлю)
 const infoPath = path.join(daeDir, "m3-viewer.json");
+let drillPanels = null;
 if (fs.existsSync(infoPath)) {
   // UTF-8 (через fs) або cp1251 (запасний запис скрипта через system.writeTextFile)
   const rawInfo = fs.readFileSync(infoPath);
@@ -189,6 +190,8 @@ if (fs.existsSync(infoPath)) {
     probes: Array.isArray(meta.probes) ? meta.probes : [],
   };
   scene.setExtras({ ...scene.getExtras(), m3 });
+  // Присадка — НЕ в модель (вона публічна), а окремим зашифрованим файлом лише для менеджера
+  if (Array.isArray(meta.drill) && meta.drill.length) drillPanels = meta.drill;
   console.log(`   кріплень з БАЗИСу: ${m3.fasteners.length}`);
   console.log(`   параметри виробу: «${m3.name}» ${m3.prefix}${withOrder ? ", замовлення: " + m3.order : " (замовлення не додано: --with-order)"}`);
 } else {
@@ -203,6 +206,23 @@ fs.mkdirSync(path.dirname(outPath), { recursive: true });
 await io.write(outPath, doc);
 if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
 console.log('3/3 Готово:', outPath, mb(fs.statSync(outPath).size));
+
+// Присадка: data/<назва>.drill.bin — AES-256-GCM, [12 байт IV][шифротекст]. Ключ = HMAC-SHA256(токен бота, "m3-drill"):
+// окремо не зберігається, воркер віддає його лише менеджеру (перевіряє підпис Telegram і id).
+const drillOut = path.join(path.dirname(outPath), `${slug}.drill.bin`);
+if (drillPanels) {
+  const { createHmac, createCipheriv, randomBytes } = await import('node:crypto');
+  const token = JSON.parse(fs.readFileSync(path.resolve('bot.config.json'), 'utf8')).botToken;
+  const key = createHmac('sha256', token).update('m3-drill').digest();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const body = Buffer.concat([cipher.update(JSON.stringify({ v: 1, panels: drillPanels }), 'utf8'), cipher.final(), cipher.getAuthTag()]);
+  fs.writeFileSync(drillOut, Buffer.concat([iv, body]));
+  const holes = drillPanels.reduce((s, p) => s + (p.h ? p.h.length : 0), 0);
+  console.log(`Присадка: деталей ${drillPanels.length}, отворів ${holes} → ${path.basename(drillOut)} (зашифровано)`);
+} else if (fs.existsSync(drillOut)) {
+  fs.rmSync(drillOut); // стара присадка до нової моделі не підходить
+}
 
 // КП з папки замовлення: PDF, назва якого починається на «КП» (наприклад, КП_48.pdf), шифруємо автоматично
 const kpFiles = fs.readdirSync(daeDir).filter((f) => /^кп.*[.]pdf$/i.test(f));

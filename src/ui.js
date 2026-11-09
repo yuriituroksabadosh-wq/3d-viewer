@@ -155,6 +155,8 @@ export function createInfoBox(el) {
       if (info.article) rows.push(h('div', { class: 'hint' }, `Артикул: ${info.article}`));
       if (info.groupCount > 1) rows.push(h('div', { class: 'hint' }, `У групі «${info.group}»: ${info.groupCount} деталей`));
       if (actions) {
+        // Присадка — лише менеджеру (кнопку передає main.js, якщо дані розшифровано)
+        if (actions.drill) rows.push(row(button(`Присадка · ${actions.drill.count}`, actions.drill.onOpen, 'btn btn-small btn-drill')));
         rows.push(row(
           button(actions.isolated ? 'Показати все' : 'Ізолювати групу', actions.onIsolate, 'btn btn-small'),
           button('Наблизити', actions.onFocus, 'btn btn-small'),

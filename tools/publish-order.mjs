@@ -85,7 +85,7 @@ const until = new Date(Date.now() + OFFER_DAYS * 86400e3);
 expiry[slug] = `${until.getFullYear()}-${String(until.getMonth() + 1).padStart(2, '0')}-${String(until.getDate()).padStart(2, '0')}`;
 fs.writeFileSync(expiryFile, JSON.stringify(expiry, null, 2) + '\n');
 log(`Пропозиція дійсна до ${expiry[slug].split('-').reverse().join('.')} (${OFFER_DAYS} дн.)`);
-const files = [`data/${slug}.glb`, `data/${slug}.kp.bin`, 'data/expiry.json'].filter((f) => fs.existsSync(path.join(ROOT, f)));
+const files = [`data/${slug}.glb`, `data/${slug}.kp.bin`, `data/${slug}.drill.bin`, 'data/expiry.json'].filter((f) => fs.existsSync(path.join(ROOT, f)));
 git(['add', ...files]);
 const staged = git(['diff', '--cached', '--name-only']).trim();
 if (staged) {

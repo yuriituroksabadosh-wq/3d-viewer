@@ -84,7 +84,7 @@ const revokedFile = path.join('data', 'revoked.json');
 const revoked = fs.existsSync(revokedFile) ? JSON.parse(fs.readFileSync(revokedFile, 'utf8')) : [];
 if (!revoked.includes(slug)) revoked.push(slug);
 fs.writeFileSync(revokedFile, JSON.stringify(revoked, null, 2) + '\n');
-const files = ['glb', 'kp.bin', 'jpg'].map((e) => `data/${slug}.${e}`).filter((f) => fs.existsSync(f));
+const files = ['glb', 'kp.bin', 'drill.bin', 'jpg'].map((e) => `data/${slug}.${e}`).filter((f) => fs.existsSync(f));
 git(['rm', '-q', '--', ...files]);
 git(['add', revokedFile]);
 git(['commit', '-q', '-m', `Відміна замовлення ${slug}: доступ закрито`]);

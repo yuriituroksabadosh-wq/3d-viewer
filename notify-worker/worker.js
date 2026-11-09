@@ -284,11 +284,29 @@ async function onEvent(request, env) {
   return json({ ok: !!res.ok, client: toClient }, cors(origin));
 }
 
+// ---------- Присадка: ключ лише менеджеру ----------
+// Файл data/<назва>.drill.bin зашифровано ключем HMAC-SHA256(токен бота, "m3-drill") (tools/convert-dae.mjs).
+// Віддаємо ключ, лише якщо підписані Telegram дані (initData) належать менеджеру (CHAT_ID).
+async function drillKey(request, env) {
+  const origin = request.headers.get('Origin') || '';
+  if (!ALLOWED_ORIGINS.includes(origin)) return new Response('Forbidden', { status: 403 });
+  let data;
+  try { data = await request.json(); } catch { return new Response('Bad request', { status: 400, headers: cors(origin) }); }
+  const u = await verifiedUser(data.initData, env.BOT_TOKEN);
+  if (!u || String(u.id) !== String(env.CHAT_ID)) return json({ ok: false }, cors(origin));
+  const enc = new TextEncoder();
+  const k = await crypto.subtle.importKey('raw', enc.encode(env.BOT_TOKEN), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const raw = new Uint8Array(await crypto.subtle.sign('HMAC', k, enc.encode('m3-drill')));
+  const key = btoa(String.fromCharCode(...raw)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return json({ ok: true, key }, { ...cors(origin), 'Cache-Control': 'no-store' });
+}
+
 export default {
   async fetch(request, env) {
     const path = new URL(request.url).pathname;
     if (path === '/revoke' && request.method === 'POST') return revoke(request, env);
     if (path === '/tg' && request.method === 'POST') return onUpdate(request, env);
+    if (path === '/drillkey' && request.method === 'POST') return drillKey(request, env);
     return onEvent(request, env);
   },
   async scheduled(event, env, ctx) {
