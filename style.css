@@ -593,3 +593,10 @@ a.btn { text-decoration: none; box-sizing: border-box; }
 .drill-coords { display: flex; flex-direction: column; padding: 4px 12px 8px 30px; border-bottom: 1px solid var(--border); font-size: 13px; }
 .drill-coords div { display: flex; justify-content: space-between; padding: 3px 0; color: var(--hint); }
 .drill-coords div span:last-child { color: var(--text); font-variant-numeric: tabular-nums; }
+.drill-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.drill-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.drill-seg button { border: 0; background: none; color: var(--text); font: inherit; font-size: 13px; font-weight: 600; padding: 7px 11px; cursor: pointer; }
+.drill-seg button.on { background: #e0592a; color: #fff; }
+.drill-tool { min-width: 36px; height: 34px; border: 1px solid var(--border); border-radius: 10px; background: none; color: var(--text); font: inherit; font-size: 16px; font-weight: 700; cursor: pointer; }
+.drill-pic.is-3d { padding: 0; height: min(58vh, 520px); overflow: hidden; background: linear-gradient(#fbfaf7, #ece8df); }
+.drill-3d { display: block; width: 100%; height: 100%; touch-action: none; }
