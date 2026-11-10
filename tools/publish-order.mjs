@@ -11,7 +11,8 @@ import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// Повний шлях (realpath): батник із БАЗИСу запускає нас коротким 8.3 (3D-VIE~1), і Vite з ним не знаходить бібліотеки
+const ROOT = fs.realpathSync.native(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const SITE = 'https://yuriituroksabadosh-wq.github.io/3d-viewer/';
 const LOG = path.join(ROOT, 'publish-log.txt');
 process.chdir(ROOT);

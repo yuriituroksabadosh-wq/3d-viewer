@@ -9,7 +9,8 @@ import readline from 'node:readline';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// Повний шлях (realpath): батник із БАЗИСу запускає нас коротким 8.3 (3D-VIE~1), і Vite з ним не знаходить бібліотеки
+const ROOT = fs.realpathSync.native(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
 process.chdir(ROOT);
 const LOG = path.join(ROOT, 'publish-log.txt');
 const log = (s) => {
