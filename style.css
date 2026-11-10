@@ -600,3 +600,14 @@ a.btn { text-decoration: none; box-sizing: border-box; }
 .drill-tool { min-width: 36px; height: 34px; border: 1px solid var(--border); border-radius: 10px; background: none; color: var(--text); font: inherit; font-size: 16px; font-weight: 700; cursor: pointer; }
 .drill-pic.is-3d { padding: 0; height: min(58vh, 520px); overflow: hidden; background: linear-gradient(#fbfaf7, #ece8df); }
 .drill-3d { display: block; width: 100%; height: 100%; touch-action: none; }
+/* Вибраний у 3D отвір */
+.drill-pick { margin-top: 8px; padding: 10px 12px; border-radius: 12px; background: #fff7d6; border: 1px solid #f0d77a; font-size: 14px; line-height: 1.35; }
+.drill-pick .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.drill-pick .tag { color: #6b6457; font-size: 12px; }
+.drill-pick .xy { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.drill-pick .nm { color: #6b6457; font-size: 12px; }
+/* Типи кріплення над кресленням присадки */
+.drill-cats { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 8px; scrollbar-width: none; }
+.drill-cats::-webkit-scrollbar { display: none; }
+.drill-cat { flex: none; border: 1px solid var(--border); background: #fff; border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; font-weight: 600; color: #3a352c; cursor: pointer; white-space: nowrap; }
+.drill-cat.on { background: #e0592a; border-color: #e0592a; color: #fff; }

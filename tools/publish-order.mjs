@@ -7,8 +7,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { execFileSync, spawn } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -26,6 +26,11 @@ const fail = (s) => {
   process.exit(1);
 };
 const node = (args) => execFileSync(process.execPath, args, { stdio: 'inherit', cwd: ROOT });
+// Асинхронно: поки йде прев'ю, у цьому ж процесі має відповідати тимчасовий сервер Vite
+// (execFileSync блокував процес — сервер мовчав, і прев'ю щоразу падало по таймауту через 2 хв)
+const nodeAsync = (args) => new Promise((res, rej) => {
+  spawn(process.execPath, args, { stdio: 'inherit', cwd: ROOT }).on('exit', (c) => (c === 0 ? res() : rej(new Error('код ' + c)))).on('error', rej);
+});
 
 // git: з PATH або зі стандартного місця
 const GIT = ['C:/Program Files/Git/cmd/git.exe', 'C:/Program Files/Git/bin/git.exe'].find((p) => fs.existsSync(p)) || 'git';
@@ -70,7 +75,24 @@ const translit = (s) => String(s || '').toLowerCase().split('').map((c) => (c in
   .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 const num = (/^([0-9]+)/.exec(path.basename(dir)) || /([0-9]+)/.exec(meta.prefix || '') || [])[1] || '';
 const base = translit(meta.name || (noDae ? path.basename(dir) : path.basename(dae, path.extname(dae)))).slice(0, 40) || 'model';
-const slug = [base, num, noDae ? 'test' : ''].filter(Boolean).join('-');
+// Випадковий хвіст у посиланні, щоб чужі моделі не можна було знайти перебором номерів («sanvuzol-k7f2q-49»).
+// Хвіст — посередині: пошук за номером («стат 49», M3-extend 49, відміна) і далі бачить «…-49» у кінці.
+// Повторна публікація того самого замовлення бере той самий хвіст (keys/slugs.json, поза git).
+// Старі моделі без хвоста (вже розіслані посилання) лишаються як були.
+const plain = [base, num].filter(Boolean).join('-');
+const SLUGS = path.join(ROOT, 'keys', 'slugs.json');
+const slugs = fs.existsSync(SLUGS) ? JSON.parse(fs.readFileSync(SLUGS, 'utf8')) : {};
+let slug;
+if (noDae) slug = plain + '-test';
+else if (slugs[plain]) slug = slugs[plain];
+else if (fs.existsSync(path.join(ROOT, 'data', `${plain}.glb`))) slug = plain;
+else {
+  const tail = [...randomBytes(5)].map((b) => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
+  slug = [base, tail, num].filter(Boolean).join('-');
+  slugs[plain] = slug;
+  fs.mkdirSync(path.dirname(SLUGS), { recursive: true });
+  fs.writeFileSync(SLUGS, JSON.stringify(slugs, null, 2));
+}
 log('Назва в посиланні: ' + slug);
 
 // ---- 3. Конвертація (+ шифрування КП з папки) ----
@@ -115,7 +137,7 @@ try {
   const local = devServer.resolvedUrls?.local?.[0] || 'http://localhost:5174/';
   for (let i = 1; i <= 2 && !shot; i++) {
     try {
-      node([path.join('tools', 'preview.mjs'), slug, local]);
+      await nodeAsync([path.join('tools', 'preview.mjs'), slug, local]);
       shot = true;
     } catch {
       log(`Прев'ю: спроба ${i} не вдалась${i < 2 ? ', повторюю…' : ''}`);

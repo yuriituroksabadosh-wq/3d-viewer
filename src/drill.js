@@ -55,12 +55,25 @@ const groupKey = (h) => `${h.t}|${h.e || ''}|${h.d}|${h.th ? 'th' : h.h}|${h.n |
 const isSideEdge = (h) => h.t === 'E' && (h.e === 'L' || h.e === 'R'); // лівий/правий торець — лише Y
 const isEndEdge = (h) => h.t === 'E' && (h.e === 'D' || h.e === 'U'); // нижній/верхній торець — лише X
 
+// Тип кріплення за назвою (для кнопок-фільтрів над кресленням)
+const CATS = [
+  ['dowel', 'Шканти', /шкант/i],
+  ['confirmat', 'Конфірмати', /конфірмат|конфирмат|комформат|евровинт|євроґвинт/i],
+  ['minifix', 'Мініфікси', /мініфікс|минификс|twister|rastex|ексцентрик|эксцентрик/i],
+  ['tie', 'Стяжки', /стяжк|mfix/i],
+  ['hinge', 'Петлі', /петл|clip|blum|d35|ø35|чашк/i],
+  ['shelf', 'Полицетримачі', /полкотрим|полицетрим|полкодерж|тримач/i],
+  ['screw', 'Шурупи', /саморіз|саморез|шуруп/i],
+  ['other', 'Інші', /./],
+];
+const catOf = (n) => (CATS.find(([, , re]) => re.test(n || '')) || CATS[CATS.length - 1])[0];
+
 /** Групи однакових отворів: діаметр, глибина, пласть/торець, кріплення. */
 function groupsOf(panel) {
   const map = new Map();
   for (const h of panel.h || []) {
     const k = groupKey(h);
-    if (!map.has(k)) map.set(k, { key: k, t: h.t, e: h.e, d: h.d, h: h.h, th: h.th, n: h.n || '', items: [] });
+    if (!map.has(k)) map.set(k, { key: k, t: h.t, e: h.e, d: h.d, h: h.h, th: h.th, n: h.n || '', cat: catOf(h.n), items: [] });
     map.get(k).items.push(h);
   }
   const list = [...map.values()].sort((a, b) => (a.t > b.t ? 1 : a.t < b.t ? -1 : b.d - a.d));
@@ -69,6 +82,30 @@ function groupsOf(panel) {
 }
 
 // ---------------- Креслення ----------------
+/**
+ * Розсунути підписи: позиції (за зростанням) → нові позиції не ближче за gap одна до одної,
+ * кожна купка близьких — симетрично навколо свого середнього (зсуви мінімальні).
+ */
+function spread(vals, gap) {
+  const order = vals.map((v, i) => i).sort((a, b) => vals[a] - vals[b]);
+  let cl = order.map((i) => ({ ids: [i], sum: vals[i] }));
+  const start = (c) => c.sum / c.ids.length - ((c.ids.length - 1) * gap) / 2;
+  for (let merged = true; merged;) {
+    merged = false;
+    for (let i = 0; i + 1 < cl.length; i++) {
+      const a = cl[i], b = cl[i + 1];
+      if (start(a) + a.ids.length * gap > start(b) + 1e-6) {
+        cl.splice(i, 2, { ids: [...a.ids, ...b.ids], sum: a.sum + b.sum });
+        merged = true;
+        break;
+      }
+    }
+  }
+  const out = new Array(vals.length);
+  for (const c of cl) c.ids.forEach((id, k) => { out[id] = start(c) + k * gap; });
+  return out;
+}
+
 const NS = 'http://www.w3.org/2000/svg';
 function el(tag, attrs, text) {
   const e = document.createElementNS(NS, tag);
@@ -81,23 +118,37 @@ function el(tag, attrs, text) {
  * Креслення (вид з пласті А): контур, отвори, розмірні лінії з виносними від кожного отвору.
  * mode: 'base' — від бази (лівий нижній кут), 'chain' — ланцюжком.
  */
-function drawing(panel, groups, only, mode) {
+function drawing(panel, groups, isOn, mode) {
   const W = panel.w, Lh = panel.l;
   const fs = Math.max(W, Lh) / 22; // розмір цифр (у мм креслення)
-  const shown = groups.filter((g) => !only || g.key === only);
+  const shown = groups.filter(isOn);
   const holes = shown.flatMap((g) => g.items.map((h) => ({ ...h, color: g.color })));
   const uniq = (a) => [...new Set(a.map(fmt))].map(Number).sort((p, q) => p - q);
   const xs = uniq(holes.filter((h) => !isSideEdge(h)).map((h) => h.x));
   const ys = uniq(holes.filter((h) => !isEndEdge(h)).map((h) => h.y));
   // Поля під розміри: зверху X, зліва Y; у режимі «від бази» цифри повернуті, тож потрібно більше місця
   const txt = (v) => fmt(v).length * fs * 0.62;
-  const longX = Math.max(fs, ...xs.map(txt)), longY = Math.max(fs, ...ys.map(txt));
   const dimX = -fs * 1.2; // розмірна лінія X (над деталлю)
   const dimY = -fs * 1.2; // розмірна лінія Y (ліворуч)
-  const top = fs * 1.6 + (mode === 'base' ? longX : fs * 1.4) + fs;
-  const left = fs * 1.6 + (mode === 'base' ? longY : fs * 2.4) + fs;
-  const right = fs * 1.2, bottom = fs * 3.2;
-  const vb0 = { x: -left, y: -top, w: W + left + right, h: Lh + top + bottom };
+  const gap = fs * 1.08; // мінімальна відстань між сусідніми цифрами
+  const lead = fs * 0.9; // висота виноски від розмірної лінії до цифри
+  // Підписи [місце на розмірній лінії, значення]: «від бази» — самі отвори, ланцюжком — середини відрізків
+  const labelsOf = (stops) => (mode === 'chain'
+    ? stops.slice(1).map((s, i) => [(s + stops[i]) / 2, s - stops[i]]).filter(([, v]) => v >= 0.05)
+    : stops.slice(1).map((s) => [s, s]));
+  const xStops = mode === 'chain' ? [0, ...xs, W] : [0, ...xs];
+  const yStops = mode === 'chain' ? [0, ...ys, Lh] : [0, ...ys];
+  const xLabels = xs.length ? labelsOf(xStops) : [];
+  const yLabels = ys.length ? labelsOf(yStops) : [];
+  const xPos = spread(xLabels.map((l) => l[0]), gap);
+  const yPos = spread(yLabels.map((l) => l[0]), gap);
+  const longX = Math.max(fs, ...xLabels.map((l) => txt(l[1]))), longY = Math.max(fs, ...yLabels.map((l) => txt(l[1])));
+  const top = -dimX + lead + fs * 0.3 + longX + fs * 0.4;
+  const left = Math.max(-dimY + lead + fs * 0.3 + longY + fs * 0.4, -Math.min(0, ...xPos) + fs);
+  const right = Math.max(fs * 1.2, Math.max(W, ...xPos) - W + fs);
+  const bottom = Math.max(fs * 3.2, -Math.min(0, ...yPos) + fs);
+  const topY = Math.max(0, Math.max(Lh, ...yPos) - Lh + fs * 0.6); // розсунуті Y-підписи вище деталі
+  const vb0 = { x: -left, y: -top - topY, w: W + left + right, h: Lh + top + topY + bottom };
   const svg = el('svg', { viewBox: `${vb0.x} ${vb0.y} ${vb0.w} ${vb0.h}`, class: 'drill-svg', preserveAspectRatio: 'xMidYMid meet' });
   svg._vb0 = vb0;
   const Y = (y) => Lh - y; // у кресленні Y угору
@@ -116,41 +167,30 @@ function drawing(panel, groups, only, mode) {
     if (!isEndEdge(h)) g.append(el('line', { x1: h.x, y1: Y(h.y), x2: dimY, y2: Y(h.y), stroke: h.color, 'stroke-width': thin, 'stroke-dasharray': dash, opacity: 0.7 }));
   }
 
-  // Розмірні лінії із засічками
+  // Розмірні лінії із засічками. Підписи не налазять: близькі розсуваються, від засічки до цифри — виноска-злам
   const dimLine = { stroke: '#555', 'stroke-width': thin * 1.6 };
   const tick = (x1, y1, x2, y2) => g.append(el('line', { x1, y1, x2, y2, stroke: '#222', 'stroke-width': thin * 3 }));
   const tl = fs * 0.35;
+  const leader = { stroke: '#888', 'stroke-width': thin, fill: 'none' };
   if (xs.length) {
-    const stops = mode === 'chain' ? [0, ...xs, W] : [0, ...xs];
+    const stops = xStops;
     g.append(el('line', { x1: 0, y1: dimX, x2: Math.max(...stops), y2: dimX, ...dimLine }));
     for (const x of stops) tick(x - tl * 0.7, dimX + tl * 0.7, x + tl * 0.7, dimX - tl * 0.7);
-    if (mode === 'chain') {
-      for (let i = 1; i < stops.length; i++) {
-        const v = stops[i] - stops[i - 1];
-        if (v < 0.05) continue;
-        const cx = (stops[i] + stops[i - 1]) / 2;
-        if (txt(v) < v * 0.95) g.append(el('text', { x: cx, y: dimX - fs * 0.35, 'text-anchor': 'middle', fill: '#222' }, fmt(v)));
-        else g.append(el('text', { x: cx, y: dimX - fs * 0.35, 'text-anchor': 'start', 'dominant-baseline': 'middle', fill: '#222', transform: `rotate(-90 ${cx} ${dimX - fs * 0.35})` }, fmt(v)));
-      }
-    } else {
-      for (const x of xs) g.append(el('text', { x, y: dimX - fs * 0.4, 'text-anchor': 'start', 'dominant-baseline': 'middle', fill: '#222', transform: `rotate(-90 ${x} ${dimX - fs * 0.4})` }, fmt(x)));
-    }
+    xLabels.forEach(([at, v], i) => {
+      const lx = xPos[i], y0 = dimX - fs * 0.15, y1 = dimX - lead;
+      if (Math.abs(lx - at) > 0.5) g.append(el('path', { d: `M${at},${y0}L${at},${y0 - fs * 0.25}L${lx},${y1}`, ...leader }));
+      g.append(el('text', { x: lx, y: y1 - fs * 0.1, 'text-anchor': 'start', 'dominant-baseline': 'middle', fill: '#222', transform: `rotate(-90 ${lx} ${y1 - fs * 0.1})` }, fmt(v)));
+    });
   }
   if (ys.length) {
-    const stops = mode === 'chain' ? [0, ...ys, Lh] : [0, ...ys];
+    const stops = yStops;
     g.append(el('line', { x1: dimY, y1: Y(0), x2: dimY, y2: Y(Math.max(...stops)), ...dimLine }));
     for (const y of stops) tick(dimY - tl * 0.7, Y(y) + tl * 0.7, dimY + tl * 0.7, Y(y) - tl * 0.7);
-    if (mode === 'chain') {
-      for (let i = 1; i < stops.length; i++) {
-        const v = stops[i] - stops[i - 1];
-        if (v < 0.05) continue;
-        const cy = Y((stops[i] + stops[i - 1]) / 2);
-        if (txt(v) < v * 0.95) g.append(el('text', { x: dimY - fs * 0.35, y: cy, 'text-anchor': 'middle', fill: '#222', transform: `rotate(-90 ${dimY - fs * 0.35} ${cy})` }, fmt(v)));
-        else g.append(el('text', { x: dimY - fs * 0.4, y: cy, 'text-anchor': 'end', 'dominant-baseline': 'middle', fill: '#222' }, fmt(v)));
-      }
-    } else {
-      for (const y of ys) g.append(el('text', { x: dimY - fs * 0.4, y: Y(y), 'text-anchor': 'end', 'dominant-baseline': 'middle', fill: '#222' }, fmt(y)));
-    }
+    yLabels.forEach(([at, v], i) => {
+      const ly = yPos[i], x0 = dimY - fs * 0.15, x1 = dimY - lead;
+      if (Math.abs(ly - at) > 0.5) g.append(el('path', { d: `M${x0},${Y(at)}L${x0 - fs * 0.25},${Y(at)}L${x1},${Y(ly)}`, ...leader }));
+      g.append(el('text', { x: x1 - fs * 0.1, y: Y(ly), 'text-anchor': 'end', 'dominant-baseline': 'middle', fill: '#222' }, fmt(v)));
+    });
   }
 
   // Габарити
@@ -271,7 +311,7 @@ function textSprite(text, color, size) {
  * 3D-вигляд деталі: напівпрозора плита, отвори кольорами груп на справжню глибину. Пласть А дивиться на нас (+Z),
  * пласть Б — назад (z = −T). Повертає { dispose }.
  */
-function drill3d(host, panel, groups, only) {
+function drill3d(host, panel, groups, isOn, onPick) {
   const W = panel.w, Lh = panel.l, T = panel.t || 18;
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -294,9 +334,10 @@ function drill3d(host, panel, groups, only) {
 
   // Отвори (дрібні — не менше ~1/90 деталі, щоб їх було видно на великій плиті; глибина — справжня)
   const up = new THREE.Vector3(0, 1, 0);
+  const holeMeshes = [];
   const minR = Math.max(W, Lh) / 180;
   for (const gr of groups) {
-    const active = !only || gr.key === only;
+    const active = isOn(gr);
     const mat = new THREE.MeshStandardMaterial({ color: active ? gr.color : '#b9bcc0', roughness: 0.5, transparent: !active, opacity: active ? 1 : 0.35 });
     for (const h of gr.items) {
       const len = h.th ? T : Math.max(0.5, h.h || 10);
@@ -315,6 +356,9 @@ function drill3d(host, panel, groups, only) {
         else { m.position.set(h.x, h.y - len / 2 + 0.2, z); }
       }
       m.renderOrder = 1;
+      m.userData.hole = h;
+      m.userData.group = gr;
+      holeMeshes.push(m);
       scene.add(m);
     }
   }
@@ -338,6 +382,35 @@ function drill3d(host, panel, groups, only) {
   controls.enableDamping = true;
   controls.update();
   renderer.domElement.className = 'drill-3d';
+
+  // Тап по отвору (не перетягування) — підсвітити його й показати координати
+  const ray = new THREE.Raycaster();
+  const pickMat = new THREE.MeshStandardMaterial({ color: 0xffd400, emissive: 0xffa000, emissiveIntensity: 0.6, roughness: 0.4 });
+  let picked = null;
+  let down = null;
+  const select = (m) => {
+    if (picked) { picked.material = picked.userData.mat; picked.scale.set(1, 1, 1); }
+    picked = m;
+    if (m) { m.userData.mat = m.material; m.material = pickMat; m.scale.set(1.6, 1, 1.6); }
+    if (onPick) onPick(m ? { h: m.userData.hole, g: m.userData.group } : null);
+  };
+  renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
+  renderer.domElement.addEventListener('pointerup', (e) => {
+    if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) return;
+    const r = renderer.domElement.getBoundingClientRect();
+    ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+    const hit = ray.intersectObjects(holeMeshes, false)[0];
+    if (hit) { select(hit.object); return; }
+    // Отвори дрібні — беремо найближчий на екрані в радіусі пальця (28 px)
+    let best = null, bd = 28;
+    const v = new THREE.Vector3();
+    for (const m of holeMeshes) {
+      v.copy(m.position).project(camera);
+      const d = Math.hypot((v.x + 1) / 2 * r.width - (e.clientX - r.left), (1 - v.y) / 2 * r.height - (e.clientY - r.top));
+      if (d < bd) { bd = d; best = m; }
+    }
+    select(best);
+  });
   host.replaceChildren(renderer.domElement);
 
   let raf = 0;
@@ -356,12 +429,14 @@ function drill3d(host, panel, groups, only) {
   const dispose = () => {
     cancelAnimationFrame(raf);
     controls.dispose();
+    pickMat.dispose();
     scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); } });
     renderer.dispose();
   };
   raf = requestAnimationFrame(loop);
   return {
     dispose,
+    unpick: () => select(null),
     reset: () => { camera.position.copy(center).add(view0); controls.target.copy(center); },
     flip: () => { // глянути з пласті Б
       const off = camera.position.clone().sub(controls.target);
@@ -400,6 +475,8 @@ const tool = (label, title, fn) => {
 export function showDrill(panel) {
   const groups = groupsOf(panel);
   let only = null;
+  let cat = null; // тип кріплення: null — усі
+  const isOn = (g) => (!cat || g.cat === cat) && (!only || g.key === only);
   let view = '2d';
   let mode = 'base';
   let v3 = null;
@@ -416,13 +493,47 @@ export function showDrill(panel) {
   legend.className = 'drill-hint';
   const list = document.createElement('div');
   list.className = 'drill-list';
+  // Кнопки типів кріплення: лише ті, що є в деталі, з кількістю отворів
+  const cats = document.createElement('div');
+  cats.className = 'drill-cats';
+  const renderCats = () => {
+    const present = CATS.filter(([id]) => groups.some((g) => g.cat === id));
+    if (present.length < 2) { cats.hidden = true; return; }
+    const count = (id) => groups.filter((g) => !id || g.cat === id).reduce((n, g) => n + g.items.length, 0);
+    cats.replaceChildren(...[[null, 'Усі'], ...present.map(([id, label]) => [id, label])].map(([id, label]) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'drill-cat' + (cat === id ? ' on' : '');
+      b.textContent = `${label} · ${count(id)}`;
+      b.addEventListener('click', () => { cat = id; only = null; renderCats(); renderList(); renderView(); });
+      return b;
+    }));
+  };
+  // Вибраний у 3D отвір: що це і де
+  const pick = document.createElement('div');
+  pick.className = 'drill-pick';
+  pick.hidden = true;
+  const showPick = (p) => {
+    pick.hidden = !p;
+    if (!p) return;
+    const { h, g } = p;
+    const where = h.t === 'E' ? `${SIDE.E} ${EDGE[h.e] || ''}` : SIDE[h.t];
+    const pos = h.t === 'E'
+      ? (h.e === 'L' || h.e === 'R' ? `Y ${fmt(h.y)}` : `X ${fmt(h.x)}`) + ` · Z ${fmt(h.z)}`
+      : `X ${fmt(h.x)} · Y ${fmt(h.y)}`;
+    pick.innerHTML = `<span class="dot" style="background:${g.color}"></span><b>${holeTitle(g)}</b> <span class="tag"></span><div class="xy"></div><div class="nm"></div>`;
+    pick.querySelector('.tag').textContent = (h.th ? 'наскрізний · ' : '') + where;
+    pick.querySelector('.xy').textContent = pos;
+    pick.querySelector('.nm').textContent = (h.n || '').replace(/s+(Muller|Hettich|Blum|MULLER).*$/i, '');
+  };
 
   const renderView = () => {
     if (v3) { v3.dispose(); v3 = null; }
+    showPick(null);
     if (view === '3d') {
       pic.classList.add('is-3d');
-      v3 = drill3d(pic, panel, groups, only);
-      legend.textContent = 'Крутіть деталь пальцем, двома — збільшити. «А» — пласть А, «Б» — пласть Б, «0» — база. Сірі — інші групи.';
+      v3 = drill3d(pic, panel, groups, isOn, showPick);
+      legend.textContent = 'Тапніть отвір — покаже координати. Крутіть пальцем, двома — збільшити. «А», «Б» — пласті, «0» — база.';
       bar.replaceChildren(
         seg([['2d', 'Креслення'], ['3d', '3D']], view, (v) => { view = v; renderView(); }),
         tool('А/Б', 'Перевернути', () => v3 && v3.flip()),
@@ -430,7 +541,7 @@ export function showDrill(panel) {
       );
     } else {
       pic.classList.remove('is-3d');
-      const svg = drawing(panel, groups, only, mode);
+      const svg = drawing(panel, groups, isOn, mode);
       pic.replaceChildren(svg);
       const z = zoomable(svg);
       legend.textContent = 'Вид з пласті А. Суцільні — пласть А, пунктир — пласть Б, смужки — торець. «0» — база. Двома пальцями — збільшити.';
@@ -445,7 +556,7 @@ export function showDrill(panel) {
   };
 
   const renderList = () => {
-    list.replaceChildren(...groups.map((g) => {
+    list.replaceChildren(...groups.filter((g) => !cat || g.cat === cat).map((g) => {
       const row = document.createElement('button');
       row.type = 'button';
       row.className = 'drill-row' + (only === g.key ? ' active' : '');
@@ -473,8 +584,9 @@ export function showDrill(panel) {
     if (!groups.length) list.textContent = 'Отворів у цій деталі немає.';
   };
 
-  wrap.append(head, bar, pic, legend, list);
+  wrap.append(head, cats, bar, pic, pick, legend, list);
   openSheet(`Присадка · ${panel.name || 'деталь'}`, wrap);
+  renderCats();
   renderView();
   renderList();
 }
