@@ -1,5 +1,6 @@
 // Конвертер моделі з БАЗИСу (COLLADA .dae + папка текстур) у стиснутий GLB для сайту.
 // Використання:  npm run convert -- "шлях\до\Модель.dae" назва-латиницею
+//                або "шлях\до\m3-viewer.json" — модель без .dae, з геометрії скрипта БАЗИС 1.6+ (tools/geom-build.mjs)
 // Результат:     data/<назва>.glb
 //
 // Кроки: assimp (той самий рушій, яким БАЗИС пише .dae) -> GLB,
@@ -16,6 +17,7 @@ import { dedup, instance, prune, weld, textureCompress, meshopt, getBounds } fro
 import { MeshoptEncoder, MeshoptDecoder } from 'meshoptimizer';
 import sharp from 'sharp';
 import { daeToDocument } from './dae-parse.mjs';
+import { geomToDocument, textureMap } from './geom-build.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -69,7 +71,9 @@ function nodeNamesById(daeText) {
 }
 
 console.log('1/3 Читаю', daePath, mb(fs.statSync(daePath).size));
-const daeBytes = fs.readFileSync(daePath);
+// Без .dae: вхід — m3-viewer.json з розділом geom
+const fromGeom = /\.json$/i.test(daePath);
+const daeBytes = fromGeom ? Buffer.alloc(0) : fs.readFileSync(daePath);
 const refs = referencedFiles(daeBytes.toString('utf8'));
 
 // ---- 2. glTF-Transform: оптимізація ----
@@ -83,7 +87,19 @@ const io = new NodeIO()
 let doc;
 let tmp = null;
 const t0 = Date.now();
-if (!args.includes('--assimp')) {
+if (fromGeom) {
+  const raw = fs.readFileSync(daePath);
+  let text = new TextDecoder('utf-8').decode(raw);
+  if (text.includes('\uFFFD')) text = new TextDecoder('windows-1251').decode(raw);
+  const g = JSON.parse(text.replace(/^\uFEFF/, '')).geom;
+  if (!g || !Array.isArray(g.panels) || !g.panels.length) {
+    console.error('У m3-viewer.json немає геометрії (потрібен скрипт «Експорт для 3D-перегляду» 1.6+).');
+    process.exit(1);
+  }
+  const r = geomToDocument(g, textureMap(path.resolve('.cache', 'texmap.json')));
+  doc = r.doc;
+  console.log(`2/3 без .dae: плит ${r.panels}, фурнітури (габарити) ${r.boxes}, пропущено ${r.skipped}; матеріалів з текстурою ${r.textured}, кольором ${r.colored} — ${((Date.now() - t0) / 1000).toFixed(1)} с`);
+} else if (!args.includes('--assimp')) {
   try {
     doc = daeToDocument(daePath);
     console.log(`2/3 розібрано за ${((Date.now() - t0) / 1000).toFixed(1)} с (без assimp)`);

@@ -35,9 +35,13 @@ const git = (args) => execFileSync(GIT, args, { cwd: ROOT, encoding: 'utf8' });
 // Папка: з аргументу або з файла-заявки publish-request.txt (його пише скрипт БАЗИС —
 // так шлях із пробілами й кирилицею не ламається при запуску через cmd)
 let dir = (process.argv[2] || '').replace(/^"|"$/g, '').trim();
+// Тест без .dae (скрипт 1.6+): друге слово/рядок заявки «nodae» або аргумент --nodae
+let noDae = process.argv.includes('--nodae');
 const REQUEST = path.join(ROOT, 'publish-request.txt');
 if (!dir && fs.existsSync(REQUEST)) {
-  dir = fs.readFileSync(REQUEST, 'utf8').replace(/^﻿/, '').trim();
+  const lines = fs.readFileSync(REQUEST, 'utf8').replace(/^﻿/, '').split(/\r?\n/).map((l) => l.trim());
+  dir = lines[0];
+  if (lines.includes('nodae')) noDae = true;
   fs.rmSync(REQUEST, { force: true });
 }
 if (dir && fs.existsSync(dir) && fs.statSync(dir).isFile()) dir = path.dirname(dir);
@@ -46,9 +50,9 @@ log('Папка замовлення: ' + dir);
 
 const daes = fs.readdirSync(dir).filter((f) => /[.]dae$/i.test(f))
   .map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => b.t - a.t);
-if (!daes.length) fail('У папці немає .dae — збережіть модель у БАЗИСі як COLLADA (*.dae) у цю папку.');
-const dae = path.join(dir, daes[0].f);
-log('Модель: ' + daes[0].f);
+if (!daes.length && !noDae) fail('У папці немає .dae — збережіть модель у БАЗИСі як COLLADA (*.dae) у цю папку.');
+const dae = noDae ? path.join(dir, 'm3-viewer.json') : path.join(dir, daes[0].f);
+log(noDae ? 'Модель: БЕЗ .dae — з геометрії скрипта (тест)' : 'Модель: ' + daes[0].f);
 
 // ---- 2. Назва для посилання: назва виробу латиницею + номер папки ----
 let meta = {};
@@ -65,8 +69,8 @@ const TR = { а: 'a', б: 'b', в: 'v', г: 'h', ґ: 'g', д: 'd', е: 'e', є: 
 const translit = (s) => String(s || '').toLowerCase().split('').map((c) => (c in TR ? TR[c] : c)).join('')
   .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 const num = (/^([0-9]+)/.exec(path.basename(dir)) || /([0-9]+)/.exec(meta.prefix || '') || [])[1] || '';
-const base = translit(meta.name || path.basename(dae, path.extname(dae))).slice(0, 40) || 'model';
-const slug = [base, num].filter(Boolean).join('-');
+const base = translit(meta.name || (noDae ? path.basename(dir) : path.basename(dae, path.extname(dae)))).slice(0, 40) || 'model';
+const slug = [base, num, noDae ? 'test' : ''].filter(Boolean).join('-');
 log('Назва в посиланні: ' + slug);
 
 // ---- 3. Конвертація (+ шифрування КП з папки) ----
