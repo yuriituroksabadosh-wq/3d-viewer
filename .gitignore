@@ -6,3 +6,7 @@ botfather-640x360.jpg
 publish-log.txt
 publish-request.txt
 .cache/
+data/*.glb
+data/*.kp.bin
+data/*.drill.bin
+data/*.jpg

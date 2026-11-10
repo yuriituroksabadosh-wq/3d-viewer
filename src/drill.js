@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { NOTIFY_URL } from './notify.js';
 import { openSheet } from './extras.js';
+import { fetchFile } from './files.js';
 
 const SIDE = { A: 'Пласть А', B: 'Пласть Б', E: 'Торець' };
 const EDGE = { L: 'лівий', R: 'правий', D: 'нижній', U: 'верхній' };
@@ -23,8 +24,8 @@ export async function loadDrill(name, tg) {
       body: JSON.stringify({ initData: tg.initData }),
     }).then((x) => x.json()).catch(() => null);
     if (!r || !r.ok || !r.key) return null;
-    const res = await fetch(`data/${name}.drill.bin`, { cache: 'no-cache' });
-    if (!res.ok) return null;
+    const res = await fetchFile(`${name}.drill.bin`);
+    if (!res) return null;
     const blob = new Uint8Array(await res.arrayBuffer());
     const key = await crypto.subtle.importKey('raw', fromB64url(r.key), 'AES-GCM', false, ['decrypt']);
     const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: blob.subarray(0, 12) }, key, blob.subarray(12));

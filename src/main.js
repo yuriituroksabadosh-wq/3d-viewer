@@ -11,6 +11,7 @@ import { createDims, boxDims, overallDims } from './dims.js';
 import { MANAGER_TELEGRAM } from './contact.js';
 import { notify } from './notify.js';
 import { loadDrill, matchPanel, showDrill } from './drill.js';
+import { fetchFile } from './files.js';
 
 // Готові варіанти кольору фасадів (перший пункт — колір/текстура з самого проєкту)
 const FACADE_COLORS = [
@@ -43,9 +44,10 @@ function isGlb(buffer) {
 const mb = (n) => (n / 1024 / 1024).toFixed(1);
 
 /** Завантаження з прогресом (для екрана з логотипом). */
-async function fetchWithProgress(url, onProgress) {
-  const res = await fetch(url, { cache: 'no-cache' });
-  if (!res.ok || !res.body) return res.ok ? res.arrayBuffer() : null;
+async function fetchWithProgress(file, onProgress) {
+  const res = await fetchFile(file);
+  if (!res) return null;
+  if (!res.body) return res.arrayBuffer();
   const total = Number(res.headers.get('content-length')) || 0;
   const reader = res.body.getReader();
   const chunks = [];
@@ -66,7 +68,7 @@ async function fetchWithProgress(url, onProgress) {
 /** Спершу шукаємо data/<назва>.glb (модель з БАЗИСу), потім data/<назва>.json. */
 async function loadModel(name, onProgress) {
   try {
-    const buffer = await fetchWithProgress(`data/${name}.glb`, onProgress);
+    const buffer = await fetchWithProgress(`${name}.glb`, onProgress);
     if (buffer && isGlb(buffer)) return loadGltfModel(buffer, name);
   } catch (err) {
     console.warn('GLB не завантажився, пробуємо JSON', err);

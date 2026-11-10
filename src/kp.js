@@ -3,6 +3,7 @@
 
 import { openSheet } from './extras.js';
 import { startParam } from './telegram.js';
+import { fetchFile } from './files.js';
 
 /** Ключ з адреси: …#kp=<ключ> або …?kp=<ключ> */
 export function kpKey() {
@@ -26,14 +27,8 @@ const fromB64url = (s) => {
 export async function prepareKp(name) {
   const keyText = kpKey();
   if (!keyText || !window.crypto?.subtle) return null;
-  let res;
-  try {
-    res = await fetch(`data/${name}.kp.bin`, { cache: 'no-cache' });
-  } catch {
-    return null;
-  }
-  // dev-сервер на відсутній файл віддає index.html — відсіюємо за типом
-  if (!res.ok || /text\/html/.test(res.headers.get('content-type') || '')) return null;
+  const res = await fetchFile(`${name}.kp.bin`);
+  if (!res) return null;
   const blob = new Uint8Array(await res.arrayBuffer());
 
   let pdf = null;

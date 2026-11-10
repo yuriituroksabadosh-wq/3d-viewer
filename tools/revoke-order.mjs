@@ -84,8 +84,19 @@ const revokedFile = path.join('data', 'revoked.json');
 const revoked = fs.existsSync(revokedFile) ? JSON.parse(fs.readFileSync(revokedFile, 'utf8')) : [];
 if (!revoked.includes(slug)) revoked.push(slug);
 fs.writeFileSync(revokedFile, JSON.stringify(revoked, null, 2) + '\n');
+// Сховище воркера: видалити файли насправді
+try {
+  const key = fs.readFileSync(path.join('keys', 'revoke.txt'), 'utf8').trim();
+  for (const e of ['glb', 'kp.bin', 'drill.bin']) await fetch(`${WORKER}/f/${slug}.${e}`, { method: 'DELETE', headers: { 'X-M3-Key': key } });
+  log('зі сховища воркера видалено');
+} catch (err) {
+  log(`зі сховища воркера видалити не вдалося: ${err.message}`);
+}
 const files = ['glb', 'kp.bin', 'drill.bin', 'jpg'].map((e) => `data/${slug}.${e}`).filter((f) => fs.existsSync(f));
-git(['rm', '-q', '--', ...files]);
+// У git — лише ті, що там є (нові моделі в git не потрапляють); решта — просто з диска
+const tracked = git(['ls-files', '--', ...files]).split(/\r?\n/).filter(Boolean);
+if (tracked.length) git(['rm', '-q', '--', ...tracked]);
+for (const f of files) if (!tracked.includes(f)) fs.rmSync(f, { force: true });
 git(['add', revokedFile]);
 git(['commit', '-q', '-m', `Відміна замовлення ${slug}: доступ закрито`]);
 git(['push', '-q']);

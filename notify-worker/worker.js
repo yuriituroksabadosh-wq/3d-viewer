@@ -301,9 +301,46 @@ async function drillKey(request, env) {
   return json({ ok: true, key }, { ...cors(origin), 'Cache-Control': 'no-store' });
 }
 
+// ---------- Файли моделей (GLB, КП, присадка) — у KV замість git ----------
+// Так репозиторій не розростається, а відміна видаляє файли насправді. Ключ KV: f:<файл>.
+// Читати — будь-кому (як і сайт); записувати й видаляти — лише з ключем менеджера (REVOKE_KEY).
+const FILE_RE = /^\/f\/([a-zA-Z0-9-]{1,64}\.(glb|kp\.bin|drill\.bin))$/;
+const FILE_TYPES = { glb: 'model/gltf-binary', 'kp.bin': 'application/octet-stream', 'drill.bin': 'application/octet-stream' };
+async function files(request, env, file, ext) {
+  const key = `f:${file}`;
+  if (request.method === 'GET' || request.method === 'HEAD') {
+    const cache = caches.default;
+    const hit = await cache.match(request);
+    if (hit) return hit;
+    const body = await env.M3.get(key, 'arrayBuffer');
+    if (!body) return new Response('Not found', { status: 404, headers: { 'Access-Control-Allow-Origin': '*' } });
+    const res = new Response(body, {
+      headers: { 'Content-Type': FILE_TYPES[ext], 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=60' },
+    });
+    await cache.put(request, res.clone());
+    return res;
+  }
+  if (!env.REVOKE_KEY || request.headers.get('X-M3-Key') !== env.REVOKE_KEY) return new Response('Forbidden', { status: 403 });
+  if (request.method === 'PUT') {
+    const body = await request.arrayBuffer();
+    if (!body.byteLength || body.byteLength > 25 * 1024 * 1024) return new Response('Bad size', { status: 413 });
+    await env.M3.put(key, body);
+    await caches.default.delete(new Request(request.url));
+    return json({ ok: true, size: body.byteLength });
+  }
+  if (request.method === 'DELETE') {
+    await env.M3.delete(key);
+    await caches.default.delete(new Request(request.url));
+    return json({ ok: true });
+  }
+  return new Response('Method not allowed', { status: 405 });
+}
+
 export default {
   async fetch(request, env) {
     const path = new URL(request.url).pathname;
+    const fm = FILE_RE.exec(path);
+    if (fm) return files(request, env, fm[1], fm[2]);
     if (path === '/revoke' && request.method === 'POST') return revoke(request, env);
     if (path === '/tg' && request.method === 'POST') return onUpdate(request, env);
     if (path === '/drillkey' && request.method === 'POST') return drillKey(request, env);

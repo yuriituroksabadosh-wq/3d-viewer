@@ -111,8 +111,26 @@ const until = new Date(Date.now() + OFFER_DAYS * 86400e3);
 expiry[slug] = `${until.getFullYear()}-${String(until.getMonth() + 1).padStart(2, '0')}-${String(until.getDate()).padStart(2, '0')}`;
 fs.writeFileSync(expiryFile, JSON.stringify(expiry, null, 2) + '\n');
 log(`Пропозиція дійсна до ${expiry[slug].split('-').reverse().join('.')} (${OFFER_DAYS} дн.)`);
-const files = [`data/${slug}.glb`, `data/${slug}.kp.bin`, `data/${slug}.drill.bin`, 'data/expiry.json'].filter((f) => fs.existsSync(path.join(ROOT, f)));
-git(['add', ...files]);
+// Модель, КП і присадка — у сховище воркера (KV), щоб git не розростався. Якщо воркер ще старий — як раніше, у git.
+const WORKER = 'https://m3-notify.yurii-turok-sabadosh.workers.dev';
+const blobs = ['glb', 'kp.bin', 'drill.bin'].map((e) => `${slug}.${e}`);
+let stored = false;
+try {
+  const key = fs.readFileSync(path.join(ROOT, 'keys', 'revoke.txt'), 'utf8').trim();
+  for (const b of blobs) {
+    const p = path.join(ROOT, 'data', b);
+    const r = fs.existsSync(p)
+      ? await fetch(`${WORKER}/f/${b}`, { method: 'PUT', headers: { 'X-M3-Key': key }, body: fs.readFileSync(p) })
+      : await fetch(`${WORKER}/f/${b}`, { method: 'DELETE', headers: { 'X-M3-Key': key } }); // старий КП/присадка — геть
+    if (!r.ok) throw new Error(`${b}: ${r.status}`);
+  }
+  stored = true;
+  log('Файли моделі — у сховищі воркера (не в git)');
+} catch (e) {
+  log('Сховище воркера недоступне (' + (e.message || e) + ') — викладаю файли в git, як раніше');
+}
+const files = [...(stored ? [] : blobs.map((b) => `data/${b}`)), 'data/expiry.json'].filter((f) => fs.existsSync(path.join(ROOT, f)));
+git(['add', '-f', ...files]); // -f: data/*.glb тощо в .gitignore (запасний шлях без воркера)
 const staged = git(['diff', '--cached', '--name-only']).trim();
 if (staged) {
   git(['-c', 'user.name=Yurii Turok', '-c', 'user.email=yurii.turok.sabadosh@gmail.com',
@@ -157,14 +175,18 @@ node([path.join('tools', 'send-tg.mjs'), slug]);
 log('Картку надіслано. Перешліть її замовнику (сайт оновиться приблизно за хвилину).');
 
 // ---- 7. Контроль: чекаємо, поки сайт віддасть САМЕ ЦІ файли (звіряємо вміст) ----
-const wanted = files.map((f) => ({ f, hash: sha(fs.readFileSync(path.join(ROOT, f))) }));
+const wanted = [
+  ...files.map((f) => ({ f, url: SITE + f, hash: sha(fs.readFileSync(path.join(ROOT, f))) })),
+  ...(stored ? blobs.filter((b) => fs.existsSync(path.join(ROOT, 'data', b)))
+    .map((b) => ({ f: b, url: `${WORKER}/f/${b}`, hash: sha(fs.readFileSync(path.join(ROOT, 'data', b))) })) : []),
+];
 log('Перевіряю оновлення сайту…');
 let ok = false;
 for (let i = 0; i < 60 && !ok; i++) {
   try {
     ok = true;
-    for (const { f, hash } of wanted) {
-      const r = await fetch(`${SITE}${f}?t=${Date.now()}`, { cache: 'no-store' });
+    for (const { url, hash } of wanted) {
+      const r = await fetch(`${url}?t=${Date.now()}`, { cache: 'no-store' });
       if (!r.ok || sha(Buffer.from(await r.arrayBuffer())) !== hash) { ok = false; break; }
     }
   } catch { ok = false; /* мережа — пробуємо ще */ }
