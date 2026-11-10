@@ -534,6 +534,30 @@ async function main() {
       document.body.classList.toggle('sheet-open', on);
       if (!on) sidebar.scrollTop = 0;
     };
+    // Хрестик у розгорнутій шторці
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'sheet-close';
+    close.setAttribute('aria-label', 'Згорнути');
+    close.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
+    close.addEventListener('click', (e) => { e.stopPropagation(); setOpen(false); });
+    handle.append(close);
+    // «Ще» — остання плитка в рядку кнопок: матеріали, анімація, скинути вид
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'tile tile-more';
+    more.setAttribute('aria-label', 'Ще');
+    more.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="7" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="8" cy="17" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg><span class="tile-cap">Ще</span>';
+    more.addEventListener('click', () => setOpen(!document.body.classList.contains('sheet-open')));
+    const mainTiles = sidebar.querySelector('.tiles-main');
+    if (mainTiles) mainTiles.append(more);
+    // Тап по картці деталі в згорнутій шторці — розгорнути (там кнопки «Ізолювати», «Наблизити»)
+    $('info').addEventListener('click', (e) => {
+      if (!document.body.classList.contains('sheet-open') && !e.target.closest('button')) setOpen(true);
+    });
+    // Висота шторки — щоб «Замовити», логотип і кубик стояли над нею, а не під нею
+    const ro = new ResizeObserver(() => document.documentElement.style.setProperty('--sheet-h', `${sidebar.offsetHeight}px`));
+    ro.observe(sidebar);
     let y0 = null;
     handle.addEventListener('pointerdown', (e) => { y0 = e.clientY; handle.setPointerCapture(e.pointerId); });
     handle.addEventListener('pointerup', (e) => {

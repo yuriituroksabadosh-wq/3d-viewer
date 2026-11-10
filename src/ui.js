@@ -98,7 +98,7 @@ export function createPanel(container, handlers, colors, opts = {}) {
 
   const blocks = [
     section('Вигляд'),
-    h('div', { class: 'tiles' }, ...[...modeTiles, dimsBtn, facadesBtn, roomBtn, spinBtn, clientBtn].filter(Boolean)),
+    h('div', { class: 'tiles tiles-main' }, ...[...modeTiles, dimsBtn, facadesBtn, roomBtn, spinBtn, clientBtn].filter(Boolean)),
     // «Анімація» лише для простих моделей; у моделей з БАЗИСу «Розібрати» — на панелі іконок над моделлю
     handlers.onExplode && section('Анімація'),
     openBtn && row(openBtn),
@@ -135,9 +135,12 @@ export function createPanel(container, handlers, colors, opts = {}) {
 export function createInfoBox(el) {
   return {
     message(text) {
+      el.classList.remove('empty');
       el.replaceChildren(h('div', { class: 'hint' }, text));
     },
     show(info, actions) {
+      // Нічого не вибрано — на телефоні картку деталі ховаємо (підказка лише в розгорнутій шторці)
+      el.classList.toggle('empty', !info && !(actions && actions.isolated));
       if (!info) {
         el.replaceChildren(h('div', { class: 'hint' }, 'Натисніть на деталь, щоб побачити її назву й розміри.'));
         if (actions && actions.isolated) {
@@ -150,7 +153,7 @@ export function createInfoBox(el) {
         rows.push(h('div', { class: 'group-tag' }, info.group));
       }
       rows.push(h('strong', {}, info.title));
-      rows.push(h('div', { class: 'hint' }, `Розміри: ${info.dims}`));
+      rows.push(h('div', { class: 'hint dims' }, `Розміри: ${info.dims}`));
       if (info.material) rows.push(h('div', { class: 'hint' }, `Матеріал: ${info.material}`));
       if (info.article) rows.push(h('div', { class: 'hint' }, `Артикул: ${info.article}`));
       if (info.groupCount > 1) rows.push(h('div', { class: 'hint' }, `У групі «${info.group}»: ${info.groupCount} деталей`));
