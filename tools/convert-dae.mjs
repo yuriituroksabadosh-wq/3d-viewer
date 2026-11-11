@@ -243,12 +243,10 @@ if (drillPanels) {
 // КП з папки замовлення: PDF, назва якого починається на «КП» (наприклад, КП_48.pdf), шифруємо автоматично
 const kpFiles = fs.readdirSync(daeDir).filter((f) => /^кп.*[.]pdf$/i.test(f));
 if (kpFiles.length) {
-  // Якщо КП кілька — беремо найновіший
-  const kp = kpFiles
-    .map((f) => ({ f, t: fs.statSync(path.join(daeDir, f)).mtimeMs }))
-    .sort((x, y) => y.t - x.t)[0].f;
-  console.log('КП знайдено:', kp);
-  execFileSync(process.execPath, [path.resolve('tools', 'encrypt-kp.mjs'), path.join(daeDir, kp), slug], { stdio: 'inherit' });
+  // Якщо КП кілька — беремо всі (за назвою), клієнт перемикає їх кнопками
+  kpFiles.sort((a, b) => a.localeCompare(b, 'uk', { numeric: true }));
+  console.log('КП знайдено:', kpFiles.join(', '));
+  execFileSync(process.execPath, [path.resolve('tools', 'encrypt-kp.mjs'), ...kpFiles.map((f) => path.join(daeDir, f)), slug], { stdio: 'inherit' });
 } else {
   console.log('КП у папці не знайдено (файл має починатися на «КП» і бути .pdf) — модель буде без КП');
 }

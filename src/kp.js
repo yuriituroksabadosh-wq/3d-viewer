@@ -1,5 +1,6 @@
 // Комерційна пропозиція (КП): зашифрований PDF на сайті + ключ у посиланні після «#».
 // Без ключа файл не розшифрувати; ключ на сервер не потрапляє.
+// Кілька КП в одному файлі: «M3KP» + довжина JSON (4 байти LE) + JSON [{name,size}] + PDF підряд.
 
 import { openSheet } from './extras.js';
 import { startParam } from './telegram.js';
@@ -23,6 +24,25 @@ const fromB64url = (s) => {
   return Uint8Array.from(b, (c) => c.charCodeAt(0));
 };
 
+/** Розпакувати: один PDF або пакет кількох. Повертає [{ name, bytes }]. */
+export function unpackKp(buf) {
+  if (String.fromCharCode(...buf.subarray(0, 4)) !== 'M3KP') return [{ name: '', bytes: buf }];
+  const len = new DataView(buf.buffer, buf.byteOffset + 4, 4).getUint32(0, true);
+  const list = JSON.parse(new TextDecoder().decode(buf.subarray(8, 8 + len)));
+  let pos = 8 + len;
+  return list.map((it) => {
+    const bytes = buf.slice(pos, pos + it.size);
+    pos += it.size;
+    return { name: it.name, bytes };
+  });
+}
+
+/** Підпис кнопки: «КП_45_кухня» → «Кухня» (без «КП» і номера замовлення); якщо нічого не лишилось — «Варіант 1»… */
+function label(name, i) {
+  const s = name.replace(/^кп[\s_.№-]*(\d+[\s_.-]*)?/i, '').replace(/_+/g, ' ').trim();
+  return s ? s[0].toUpperCase() + s.slice(1) : `Варіант ${i + 1}`;
+}
+
 /** Чи є КП для моделі (файл існує і є ключ). Повертає функцію відкриття або null. */
 export async function prepareKp(name) {
   const keyText = kpKey();
@@ -31,18 +51,20 @@ export async function prepareKp(name) {
   if (!res) return null;
   const blob = new Uint8Array(await res.arrayBuffer());
 
-  let pdf = null;
+  let docs = null;
   async function decrypt() {
-    if (pdf) return pdf;
+    if (docs) return docs;
     const key = await crypto.subtle.importKey('raw', fromB64url(keyText), 'AES-GCM', false, ['decrypt']);
     const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: blob.subarray(0, 12) }, key, blob.subarray(12));
-    pdf = new Uint8Array(plain);
-    return pdf;
+    docs = unpackKp(new Uint8Array(plain));
+    return docs;
   }
 
   return async function openKp(title) {
     const body = document.createElement('div');
     body.className = 'kp';
+    const tabs = document.createElement('div');
+    tabs.className = 'kp-tabs';
     const status = document.createElement('div');
     status.className = 'hint';
     status.textContent = 'Відкриваю КП…';
@@ -52,52 +74,76 @@ export async function prepareKp(name) {
     download.className = 'btn btn-wide';
     download.type = 'button';
     download.textContent = 'Завантажити PDF';
-    body.append(status, pages, download);
+    body.append(tabs, status, pages, download);
     openSheet('Комерційна пропозиція', body);
 
-    let bytes;
+    let list;
     try {
-      bytes = await decrypt();
+      list = await decrypt();
     } catch {
       status.textContent = 'Не вдалося відкрити КП: посилання пошкоджене або застаріле. Попросіть нове посилання.';
       download.remove();
       return;
     }
 
+    let cur = 0;
+    let run = 0; // щоб старе малювання не дописувало сторінки після перемикання
     download.addEventListener('click', () => {
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      const d = list[cur];
+      const url = URL.createObjectURL(new Blob([d.bytes], { type: 'application/pdf' }));
       const a = document.createElement('a');
       a.href = url;
-      a.download = `КП — ${title}.pdf`;
+      a.download = list.length > 1 ? `${d.name} — ${title}.pdf` : `КП — ${title}.pdf`;
       document.body.append(a);
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 10000);
     });
 
-    // pdf.js вантажимо лише тепер, щоб не важчав основний застосунок
-    try {
-      const pdfjs = await import('pdfjs-dist/build/pdf.min.mjs');
-      const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
-      pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
-      const doc = await pdfjs.getDocument({ data: bytes.slice() }).promise;
-      status.textContent = `Сторінок: ${doc.numPages}`;
-      const width = Math.min(pages.clientWidth || 480, 900);
-      const ratio = Math.min(window.devicePixelRatio || 1, 2);
-      for (let i = 1; i <= doc.numPages; i++) {
-        const page = await doc.getPage(i);
-        const base = page.getViewport({ scale: 1 });
-        const viewport = page.getViewport({ scale: (width / base.width) * ratio });
-        const canvas = document.createElement('canvas');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        canvas.style.width = '100%';
-        pages.append(canvas);
-        await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+    async function show(i) {
+      cur = i;
+      const my = ++run;
+      [...tabs.children].forEach((b, j) => b.classList.toggle('on', j === i));
+      pages.textContent = '';
+      status.textContent = 'Відкриваю КП…';
+      // pdf.js вантажимо лише тепер, щоб не важчав основний застосунок
+      try {
+        const pdfjs = await import('pdfjs-dist/build/pdf.min.mjs');
+        const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
+        pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+        const doc = await pdfjs.getDocument({ data: list[i].bytes.slice() }).promise;
+        if (my !== run) return;
+        status.textContent = `Сторінок: ${doc.numPages}`;
+        const width = Math.min(pages.clientWidth || 480, 900);
+        const ratio = Math.min(window.devicePixelRatio || 1, 2);
+        for (let p = 1; p <= doc.numPages; p++) {
+          const page = await doc.getPage(p);
+          if (my !== run) return;
+          const base = page.getViewport({ scale: 1 });
+          const viewport = page.getViewport({ scale: (width / base.width) * ratio });
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          canvas.style.width = '100%';
+          pages.append(canvas);
+          await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+        }
+      } catch (err) {
+        console.error(err);
+        if (my === run) status.textContent = 'Не вдалося показати сторінки. Натисніть «Завантажити PDF».';
       }
-    } catch (err) {
-      console.error(err);
-      status.textContent = 'Не вдалося показати сторінки. Натисніть «Завантажити PDF».';
     }
+
+    if (list.length > 1) {
+      list.forEach((d, i) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'kp-tab';
+        b.textContent = label(d.name, i);
+        b.addEventListener('click', () => { if (i !== cur) show(i); });
+        tabs.append(b);
+      });
+    } else tabs.remove();
+    show(0);
   };
 }

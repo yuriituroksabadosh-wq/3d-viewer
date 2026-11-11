@@ -13,16 +13,25 @@ import { webcrypto as crypto } from 'node:crypto';
 
 const SITE = 'https://yuriituroksabadosh-wq.github.io/3d-viewer/';
 const TG_APP = 'https://t.me/m3_prodject_bot/view';
-const [pdfArg, slug] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
-if (!pdfArg || !slug || !/^[a-zA-Z0-9-]{1,64}$/.test(slug)) {
-  console.error('Використання: npm run kp -- "шлях\\до\\КП.pdf" назва-моделі');
+// Кілька КП: npm run kp -- КП_1.pdf КП_2.pdf назва-моделі (назва — останньою)
+const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const slug = args.pop();
+if (!args.length || !slug || !/^[a-zA-Z0-9-]{1,64}$/.test(slug)) {
+  console.error('Використання: npm run kp -- "шлях\\до\\КП.pdf" [ще КП.pdf …] назва-моделі');
   process.exit(1);
 }
-
-const pdf = fs.readFileSync(path.resolve(pdfArg));
-if (pdf.subarray(0, 4).toString() !== '%PDF') {
-  console.error('Це не PDF-файл:', pdfArg);
-  process.exit(1);
+const pdfs = args.map((p) => {
+  const b = fs.readFileSync(path.resolve(p));
+  if (b.subarray(0, 4).toString() !== '%PDF') { console.error('Це не PDF-файл:', p); process.exit(1); }
+  return { name: path.basename(p).replace(/[.]pdf$/i, ''), b };
+});
+// Один КП — чистий PDF (як раніше). Кілька — пакет: «M3KP» + довжина JSON (4 байти LE) + JSON [{name,size}] + PDF підряд.
+let pdf = pdfs[0].b;
+if (pdfs.length > 1) {
+  const head = Buffer.from(JSON.stringify(pdfs.map((p) => ({ name: p.name, size: p.b.length }))));
+  const len = Buffer.alloc(4);
+  len.writeUInt32LE(head.length);
+  pdf = Buffer.concat([Buffer.from('M3KP'), len, head, ...pdfs.map((p) => p.b)]);
 }
 
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');

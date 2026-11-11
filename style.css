@@ -435,6 +435,9 @@ body {
 .kp-pages { display: flex; flex-direction: column; gap: 10px; margin: 10px 0; }
 .kp-pages canvas { display: block; border-radius: 6px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12); background: #fff; }
 .sheet:has(.kp) { max-width: 900px; }
+.kp-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.kp-tab { border: 1px solid var(--border); background: #fff; border-radius: 999px; padding: 8px 14px; font: inherit; font-size: 14px; font-weight: 600; color: #3a352c; cursor: pointer; }
+.kp-tab.on { background: #e0592a; border-color: #e0592a; color: #fff; }
 
 /* Матеріали проєкту: рядок «мініатюра + група + назва» */
 .mat-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
