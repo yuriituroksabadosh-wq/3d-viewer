@@ -109,14 +109,18 @@ export function createPanel(container, handlers, colors, opts = {}) {
     blocks.push(section('Матеріали'));
     // Матеріали проєкту: для кожної групи — її матеріал (мініатюра текстури + назва), без вибору
     for (const slot of opts.materialSlots) {
-      const o = opts.materialOptions[slot.current];
-      blocks.push(h('div', { class: 'mat-row' },
-        h('span', { class: 'mat-swatch', style: `background:${o.swatch}`, title: o.name }),
-        h('span', { class: 'mat-text' },
-          h('span', { class: 'mat-group' }, slot.label),
-          h('span', { class: 'mat-name' }, o.short || o.name),
-        ),
-      ));
+      // Кілька матеріалів у групі (напр. фасади МДФ і ДСП) — кожен своїм рядком, назва групи — над першим
+      (slot.materials || [slot.current]).forEach((idx, k) => {
+        const o = opts.materialOptions[idx];
+        if (!o) return;
+        blocks.push(h('div', { class: 'mat-row' + (k ? ' mat-more' : '') },
+          h('span', { class: 'mat-swatch', style: `background:${o.swatch}`, title: o.name }),
+          h('span', { class: 'mat-text' },
+            k ? '' : h('span', { class: 'mat-group' }, slot.label),
+            h('span', { class: 'mat-name' }, o.short || o.name),
+          ),
+        ));
+      });
     }
   } else if (showFacades) {
     blocks.push(section('Колір фасадів'), h('div', { class: 'swatches' }, ...swatches), colorName);

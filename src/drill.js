@@ -153,7 +153,7 @@ function drawing(panel, groups, isOn, mode) {
   const svg = el('svg', { viewBox: `${vb0.x} ${vb0.y} ${vb0.w} ${vb0.h}`, class: 'drill-svg', preserveAspectRatio: 'xMidYMid meet' });
   svg._vb0 = vb0;
   const Y = (y) => Lh - y; // у кресленні Y угору
-  const g = el('g', { 'font-size': fs, 'font-family': 'system-ui, sans-serif', 'font-weight': 600 });
+  const g = el('g', { 'font-size': fs, 'font-family': 'Manrope, system-ui, sans-serif', 'font-weight': 600 });
   svg.append(g);
   const thin = fs * 0.05;
 

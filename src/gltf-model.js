@@ -310,25 +310,60 @@ function swatchOf(m) {
  */
 function findOpeners(parts) {
   const by = (re) => parts.filter((p) => p.key !== 'room' && re.test(p.name.title));
-  const hinges = by(/петл/i);
+  // Петля в БАЗИСі — збірка: плече, чашка («Объект 2»), планка. Частини часто без слова «петля» в назві,
+  // тож беремо все, що лежить усередині збірки-петлі
+  const hingeRoot = (p) => {
+    let root = null;
+    for (let o = p.node; o; o = o.parent) if (/петл/i.test(splitName(o.name).title)) root = o;
+    return root;
+  };
+  const hinges = parts.filter((p) => p.key !== 'room' && p.key !== 'facade' && hingeRoot(p));
   const handles = by(/ручк/i);
-  const boxBits = parts.filter((p) => p.key !== 'facade' && p.key !== 'room' && /ящик|яшик|шухляд/i.test(p.name.title));
+  // Шухляда: деталі з «ящик» у назві і вся система висування (TANDEMBOX, LEGRABOX…) — крім напрямних, вони в корпусі
+  const DRAWER_SYS = /ящик|яшик|шухляд|tandembox|legrabox|merivobox|metabox|antaro|intivo|innotech|arcitech|atira|modern ?box|модерн ?бокс/i;
+  const RAIL = /направля|runner|movento|tandem.*направ|quadro/i;
+  const boxBits = parts.filter((p) => p.key !== 'facade' && p.key !== 'room'
+    && hasAncestor(p.node, (n) => DRAWER_SYS.test(n)) && !hasAncestor(p.node, (n) => RAIL.test(n)));
   const used = new Set();
   const openers = [];
   const AX = ['x', 'y', 'z'];
   const unit = (i, s = 1) => new THREE.Vector3(i === 0 ? s : 0, i === 1 ? s : 0, i === 2 ? s : 0);
 
-  // Кожна петля належить лише одному фасаду — найближчому до неї
+  // Кожна петля (вся збірка) належить одному фасаду — тому, в якому сидить її чашка: найбільший перетин
+  // габаритів частин петлі з фасадом. Найближчий фасад тут помиляється: у кутових шафах поруч стоїть
+  // нерухома фальшпанель, і петля «під фальшпанель» до неї ближча, ніж до дверей.
   const facadesList = parts.filter((p) => p.key === 'facade');
-  const hingeOwner = new Map();
+  const assemblies = new Map();
   for (const hg of hinges) {
+    const r = hingeRoot(hg);
+    if (!assemblies.has(r)) assemblies.set(r, []);
+    assemblies.get(r).push(hg);
+  }
+  const overlap = (a, b) => {
+    const dx = Math.min(a.max.x, b.max.x) - Math.max(a.min.x, b.min.x);
+    const dy = Math.min(a.max.y, b.max.y) - Math.max(a.min.y, b.min.y);
+    const dz = Math.min(a.max.z, b.max.z) - Math.max(a.min.z, b.min.z);
+    return dx > 0 && dy > 0 && dz > 0 ? dx * dy * dz : 0;
+  };
+  const hingeOwner = new Map();
+  for (const pieces of assemblies.values()) {
     let best = null;
-    let bestD = Infinity;
+    let bestV = 0;
     for (const f of facadesList) {
-      const d = f.box.distanceToPoint(hg.center);
-      if (d < bestD) { bestD = d; best = f; }
+      const fb = f.box.clone().expandByScalar(1);
+      const v = pieces.reduce((s, p) => s + overlap(p.box, fb), 0);
+      if (v > bestV) { bestV = v; best = f; }
     }
-    if (best && bestD < 160) hingeOwner.set(hg, best);
+    if (!best) {
+      // Перетину немає — найближчий фасад (як раніше)
+      const c = pieces.reduce((acc, p) => acc.add(p.center), new THREE.Vector3()).multiplyScalar(1 / pieces.length);
+      let bestD = 160;
+      for (const f of facadesList) {
+        const d = f.box.distanceToPoint(c);
+        if (d < bestD) { bestD = d; best = f; }
+      }
+    }
+    if (best) for (const p of pieces) hingeOwner.set(p, best);
   }
 
   for (const f of facadesList) {
@@ -357,7 +392,11 @@ function findOpeners(parts) {
     const avg = (list) => list.reduce((acc, p) => acc + p.center[T], 0) / list.length;
     let outSign;
     if (hs.length) outSign = Math.sign(avg(hs) - f.center[T]) || 1;
-    else if (near.length) outSign = -(Math.sign(avg(near) - f.center[T]) || -1);
+    else if (near.length) {
+      // Чашка сидить у самому фасаді — напрям «назовні» рахуємо по частинах петлі поза ним (плече, планка)
+      const behind = near.filter((h) => !f.box.containsPoint(h.center));
+      outSign = -(Math.sign(avg(behind.length ? behind : near) - f.center[T]) || -1);
+    }
     else outSign = -(Math.sign(avg(box) - f.center[T]) || -1);
     const out = unit(t, outSign);
     const innerT = f.center[T] - outSign * (s[T] / 2); // внутрішня площина фасаду
@@ -394,7 +433,9 @@ function findOpeners(parts) {
       // Пробний поворот на +0,3 рад: якщо вільний край пішов назовні — знак «+», інакше «−»
       const moved = free.clone().sub(pivot).applyAxisAngle(axis, 0.3).add(pivot).sub(free);
       const sign = moved.dot(out) >= 0 ? 1 : -1;
-      openers.push({ kind: 'door', axis, pivot, sign, maxAngle: THREE.MathUtils.degToRad(maxDeg), dir: out, facade: f, parts: [f, ...hs] });
+      // Чашки петель (сидять у самих дверях) повертаються разом із дверима
+      const cups = near.filter((h) => overlap(h.box, f.box) > 0);
+      openers.push({ kind: 'door', axis, pivot, sign, maxAngle: THREE.MathUtils.degToRad(maxDeg), dir: out, facade: f, parts: [f, ...hs, ...cups] });
       near.concat(hs).forEach((p) => used.add(p));
       continue;
     }
@@ -488,6 +529,16 @@ export async function loadGltfModel(buffer, title) {
     if (p.key !== 'room') furnBox.union(p.box);
   }
   const box = furnBox.isEmpty() ? allBox : furnBox;
+  // У «Замірах» лежать і стіни, і техніка зі стільницею, розетками, мийкою. Кнопка «Стіни» ховає лише
+  // стіни/підлогу/плитку: за назвою або тонка велика плита (але не стільниця)
+  const WALL_RE = /^(підлога|пол|стеля|потолок|стіна|стена|[flrbt]|вікно|окно|відкос)$|плитка|фартух|кахель/i;
+  for (const p of parts) {
+    if (p.key !== 'room') continue;
+    const mats = p.meshes.map((r) => [].concat(r.original).map((m) => m.name || '').join(' ')).join(' ');
+    const s = [p.size.x, p.size.y, p.size.z].sort((a, b) => a - b);
+    const slab = s[0] <= 160 && s[1] >= 1000; // стіна/підлога: тонка й велика (двері посудомийки — ні)
+    p.wall = WALL_RE.test(p.name.title.trim()) || (slab && !/стільниц|столешн/i.test(`${p.name.title} ${p.group.name} ${mats}`));
+  }
   const bounds = {
     min: box.min.clone(),
     max: box.max.clone(),
@@ -561,6 +612,21 @@ export async function loadGltfModel(buffer, title) {
 
   // ---- Відкривання: двері обертаються на петлях, шухляди висуваються ----
   const openers = findOpeners(parts);
+  // Стартовий вид — з боку, куди дивляться фасади (кухня може стояти до осі Z спиною, і тоді
+  // камера «спереду» бачила б лише стіну). Напрям — середній «назовні» фасадів, зважений площею
+  {
+    const sum = new THREE.Vector3();
+    for (const op of openers) {
+      const s = op.facade.size;
+      sum.addScaledVector(op.dir, Math.max(s.x, s.z) * s.y);
+    }
+    sum.y = 0;
+    if (sum.lengthSq() > 1) {
+      sum.normalize();
+      // Трохи збоку (як було: −0,25 по горизонталі) і згори
+      bounds.viewDir = [sum.x - 0.25 * sum.z, 0.3, sum.z + 0.25 * sum.x];
+    }
+  }
   for (const op of openers) {
     // Усе, що рухається разом із фасадом, і розбирається разом з ним
     // Шухляда чи двері рухаються цілими: зсув фасаду + додатково вперед, щоб ящик повністю вийшов із корпусу
@@ -859,8 +925,9 @@ export async function loadGltfModel(buffer, title) {
           if (i >= 0) counts.set(i, (counts.get(i) || 0) + 1);
         }
       }
-      const current = [...counts.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? 0;
-      return { id, label: SLOT_LABELS[id], current };
+      // У групі буває кілька матеріалів (верхні фасади МДФ, нижні ДСП) — показуємо всі, найчастіший перший
+      const sorted = [...counts.entries()].sort((x, y) => y[1] - x[1]).map(([i]) => i);
+      return { id, label: SLOT_LABELS[id], current: sorted[0] ?? 0, materials: sorted.length ? sorted.slice(0, 4) : [0] };
     });
 
   function setSlotMaterial(slot, index) {
@@ -920,7 +987,8 @@ export async function loadGltfModel(buffer, title) {
   const hiddenParts = new Set();
   let clientView = true;
   let isolated = null;
-  const isVisible = (part) => !hiddenKeys.has(part.key)
+  // «Стіни» (key room) ховають лише самі стіни; техніка й стільниця з «Замірів» лишаються
+  const isVisible = (part) => !(hiddenKeys.has(part.key) && !(part.key === 'room' && !part.wall))
     && !hiddenParts.has(part)
     && !(clientView && mode !== "xray" && part.technical)
     && (!isolated || part.group === isolated);
