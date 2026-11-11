@@ -531,13 +531,14 @@ export async function loadGltfModel(buffer, title) {
   const box = furnBox.isEmpty() ? allBox : furnBox;
   // У «Замірах» лежать і стіни, і техніка зі стільницею, розетками, мийкою. Кнопка «Стіни» ховає лише
   // стіни/підлогу/плитку: за назвою або тонка велика плита (але не стільниця)
-  const WALL_RE = /^(підлога|пол|стеля|потолок|стіна|стена|[flrbt]|вікно|окно|відкос)$|плитка|фартух|кахель/i;
+  const WALL_RE = /^(підлога|пол|стеля|потолок|стіна|стена|[flrbt]|вікно|окно|відкос)$/i;
+  const SPLASH_RE = /фартух|скінал|скинал/i; // фартух — частина кухні: лишається, навіть коли стіни сховані
   for (const p of parts) {
     if (p.key !== 'room') continue;
     const mats = p.meshes.map((r) => [].concat(r.original).map((m) => m.name || '').join(' ')).join(' ');
     const s = [p.size.x, p.size.y, p.size.z].sort((a, b) => a - b);
     const slab = s[0] <= 160 && s[1] >= 1000; // стіна/підлога: тонка й велика (двері посудомийки — ні)
-    p.wall = WALL_RE.test(p.name.title.trim()) || (slab && !/стільниц|столешн/i.test(`${p.name.title} ${p.group.name} ${mats}`));
+    p.wall = !SPLASH_RE.test(`${p.name.title} ${mats}`) && (WALL_RE.test(p.name.title.trim()) || (slab && !/стільниц|столешн/i.test(`${p.name.title} ${p.group.name} ${mats}`)));
   }
   const bounds = {
     min: box.min.clone(),
