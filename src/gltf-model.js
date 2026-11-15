@@ -312,9 +312,12 @@ function findOpeners(parts) {
   const by = (re) => parts.filter((p) => p.key !== 'room' && re.test(p.name.title));
   // Петля в БАЗИСі — збірка: плече, чашка («Объект 2»), планка. Частини часто без слова «петля» в назві,
   // тож беремо все, що лежить усередині збірки-петлі
+  // Вузол із фасадами всередині — це блок (буває, що блок названо «Петля…»), а не збірка петлі
+  const withFacade = new Set();
+  for (const p of parts) if (p.key === 'facade') for (let o = p.node; o; o = o.parent) withFacade.add(o);
   const hingeRoot = (p) => {
     let root = null;
-    for (let o = p.node; o; o = o.parent) if (/петл/i.test(splitName(o.name).title)) root = o;
+    for (let o = p.node; o && !withFacade.has(o); o = o.parent) if (/петл/i.test(splitName(o.name).title)) root = o;
     return root;
   };
   const hinges = parts.filter((p) => p.key !== 'room' && p.key !== 'facade' && hingeRoot(p));
@@ -351,7 +354,9 @@ function findOpeners(parts) {
     let bestV = 0;
     for (const f of facadesList) {
       const fb = f.box.clone().expandByScalar(1);
-      const v = pieces.reduce((s, p) => s + overlap(p.box, fb), 0);
+      // Чашка («Объект 2») сидить у дверях; планка й плече — на корпусі/фальшпанелі, їх не рахуємо, якщо чашка є
+      const cups = pieces.filter((p) => /^(объект|об'єкт|чашк)/i.test(p.name.title.trim()));
+      const v = (cups.length ? cups : pieces).reduce((s, p) => s + overlap(p.box, fb), 0);
       if (v > bestV) { bestV = v; best = f; }
     }
     if (!best) {
