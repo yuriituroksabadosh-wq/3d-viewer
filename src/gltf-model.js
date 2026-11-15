@@ -438,8 +438,8 @@ function findOpeners(parts) {
       // Пробний поворот на +0,3 рад: якщо вільний край пішов назовні — знак «+», інакше «−»
       const moved = free.clone().sub(pivot).applyAxisAngle(axis, 0.3).add(pivot).sub(free);
       const sign = moved.dot(out) >= 0 ? 1 : -1;
-      // Чашки петель (сидять у самих дверях) повертаються разом із дверима
-      const cups = near.filter((h) => overlap(h.box, f.box) > 0);
+      // Разом із дверима повертається лише окрема чашка («Объект 2»); плече й планка лишаються на корпусі
+      const cups = near.filter((h) => /^(объект|об'єкт|чашк)/i.test(h.name.title.trim()) && overlap(h.box, f.box) > 0);
       openers.push({ kind: 'door', axis, pivot, sign, maxAngle: THREE.MathUtils.degToRad(maxDeg), dir: out, facade: f, parts: [f, ...hs, ...cups] });
       near.concat(hs).forEach((p) => used.add(p));
       continue;
