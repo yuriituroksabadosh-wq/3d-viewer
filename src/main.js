@@ -388,10 +388,19 @@ async function main() {
         .map((op) => ({ op, x: op.facade.center.clone().project(viewer.camera).x }))
         .sort((a, b) => a.x - b.x)
         .map((e) => e.op);
+      // Фасади можуть перетинатися (кути, сусідні двері) — тому по одному: відчинився, постояв, зачинився, далі наступний
+      const until = async (op, v) => { while (my === demoRun && op.now !== v) await wait(50); };
       model.setOpen(0);
-      for (const op of list) { if (my !== demoRun) return; op.target = 1; await wait(260); }
-      await wait(1600);
-      for (const op of list) { if (my !== demoRun) return; op.target = 0; await wait(200); }
+      for (const op of list) {
+        if (my !== demoRun) return;
+        await until(op, 0);
+        op.target = 1;
+        await until(op, 1);
+        await wait(500);
+        if (my !== demoRun) return;
+        op.target = 0;
+        await until(op, 0);
+      }
     }
     tool('anim', 'Анімація: натисніть на фасад, щоб відкрити; подвійне натискання — усі по черзі', ICONS.open, () => {
       const { doors, drawers } = model.openers;
