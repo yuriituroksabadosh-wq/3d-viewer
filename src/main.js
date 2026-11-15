@@ -378,13 +378,39 @@ async function main() {
       if (current) selectPart(current); else refreshTools();
       toast($('toast'), blockMode ? 'Вибір блоком: натисніть на будь-яку деталь блоку' : 'Вибір окремої деталі');
     }, 'Блок');
-    tool('anim', 'Анімація: натисніть на фасад, щоб відкрити', ICONS.open, () => {
+    let animTap = 0;
+    let demoRun = 0; // номер поточного демо; новий натиск зупиняє старе
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    // Демо: двері й шухляди по черзі зліва направо (як бачить камера) відчиняються, потім так само зачиняються
+    async function demo() {
+      const my = ++demoRun;
+      const list = model.openerList
+        .map((op) => ({ op, x: op.facade.center.clone().project(viewer.camera).x }))
+        .sort((a, b) => a.x - b.x)
+        .map((e) => e.op);
+      model.setOpen(0);
+      for (const op of list) { if (my !== demoRun) return; op.target = 1; await wait(260); }
+      await wait(1600);
+      for (const op of list) { if (my !== demoRun) return; op.target = 0; await wait(200); }
+    }
+    tool('anim', 'Анімація: натисніть на фасад, щоб відкрити; подвійне натискання — усі по черзі', ICONS.open, () => {
       const { doors, drawers } = model.openers;
       if (!doors && !drawers) { toast($('toast'), 'У моделі не знайдено дверей на петлях чи шухляд'); return; }
+      demoRun++; // будь-яке натискання зупиняє демо
+      // Подвійне натискання: демо «по черзі», режим анімації лишається увімкненим
+      const now = Date.now();
+      if (now - animTap < 400) {
+        animTap = 0;
+        animMode = true;
+        refreshTools();
+        demo();
+        return;
+      }
+      animTap = now;
       animMode = !animMode;
       if (animMode) {
         selectPart(null);
-        toast($('toast'), 'Анімація: натисніть на фасад — він відкриється, ще раз — закриється');
+        toast($('toast'), 'Натисніть на фасад — відкриється. Двічі на «Анімація» — усі по черзі');
       } else {
         model.setOpen(0); // виходячи з режиму, зачиняємо все
       }

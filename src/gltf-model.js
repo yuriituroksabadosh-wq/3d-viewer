@@ -1093,6 +1093,8 @@ export async function loadGltfModel(buffer, title) {
     /** Відкрити/закрити одну: повертає true, якщо після натискання вона відкривається. */
     toggleOpener(op) { op.target = op.target ? 0 : 1; return op.target === 1; },
     get anyOpen() { return openers.some((op) => op.target === 1); },
+    /** Усі двері й шухляди (для демо «по черзі»). */
+    get openerList() { return openers; },
     openers: { doors: openers.filter((o) => o.kind === 'door').length, drawers: openers.filter((o) => o.kind === 'drawer').length },
     setMaterialColor,
     /** LED-підсвітка: чи є в моделі, увімкнути/вимкнути, тон (warm | neutral | cold). */
