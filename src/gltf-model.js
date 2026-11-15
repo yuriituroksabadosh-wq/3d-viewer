@@ -327,6 +327,20 @@ function findOpeners(parts) {
   const RAIL = /направля|runner|movento|tandem.*направ|quadro/i;
   const boxBits = parts.filter((p) => p.key !== 'facade' && p.key !== 'room'
     && hasAncestor(p.node, (n) => DRAWER_SYS.test(n)) && !hasAncestor(p.node, (n) => RAIL.test(n)));
+  // Шухляда — ціла група (найвищий вузол системи без фасадів усередині): дно верхньої шухляди не дістанеться нижній
+  const drawerRoot = (p) => {
+    let root = p.node;
+    for (let o = p.node; o && !withFacade.has(o); o = o.parent) if (DRAWER_SYS.test(o.name || '')) root = o;
+    return root;
+  };
+  const drawerGroups = new Map();
+  for (const p of boxBits) {
+    const r = drawerRoot(p);
+    if (!drawerGroups.has(r)) drawerGroups.set(r, { parts: [], box: new THREE.Box3() });
+    const g = drawerGroups.get(r);
+    g.parts.push(p);
+    g.box.union(p.box);
+  }
   const used = new Set();
   const openers = [];
   const AX = ['x', 'y', 'z'];
@@ -386,11 +400,16 @@ function findOpeners(parts) {
     // Ручки: у площині фасаду, не далі ніж 80 мм від нього по товщині (з будь-якого боку)
     const hs = handles.filter((h) => !used.has(h) && inPlane(h.center, 10)
       && Math.abs(h.center[T] - f.center[T]) < s[T] / 2 + 80);
-    // Деталі ящика: перекриваються з фасадом у площині, стоять за ним
-    const box = near.length ? [] : boxBits.filter((p) => !used.has(p)
-      && p.box.max[U] > b.min[U] + 10 && p.box.min[U] < b.max[U] - 10
-      && p.center.y > b.min.y - 20 && p.center.y < b.max.y + 20
-      && Math.abs(p.center[T] - f.center[T]) < 700);
+    // Шухляда: групи, що перекриваються з фасадом у площині, з центром по висоті в межах фасаду, стоять за ним
+    // (група вища за фасад — це блок з кількома шухлядами, тоді по деталях, як раніше)
+    const fits = (bx) => {
+      const c = bx.getCenter(new THREE.Vector3());
+      return bx.max[U] > b.min[U] + 10 && bx.min[U] < b.max[U] - 10
+        && c.y > b.min.y - 20 && c.y < b.max.y + 20 && Math.abs(c[T] - f.center[T]) < 700;
+    };
+    const box = near.length ? [] : [...drawerGroups.values()].flatMap((g) =>
+      g.box.max.y - g.box.min.y <= s.y + 40 ? (fits(g.box) ? g.parts : []) : g.parts.filter((p) => fits(p.box)))
+      .filter((p) => !used.has(p));
     if (!near.length && !box.length) continue;
 
     // Куди «назовні»: бік ручки; інакше — від петель / від ящика
@@ -449,7 +468,54 @@ function findOpeners(parts) {
     openers.push({ kind: 'drawer', dir: out, slide: Math.max(150, depth * 0.75), facade: f, parts: [f, ...box, ...hs] });
     box.concat(hs).forEach((p) => used.add(p));
   }
+  limitDoors(openers, parts);
   return openers;
+}
+
+/**
+ * Двері не заходять в інший фасад чи плиту корпусу (кутові шафи): кут відкривання — до першого дотику.
+ * Перевіряємо сітку точок фасаду, повертаючи його з кроком 2°; перешкоди — фасади й плити (тонкі, ≥100 мм у двох вимірах).
+ */
+function limitDoors(openers, parts) {
+  const isSlab = (p) => {
+    const d = [p.size.x, p.size.y, p.size.z].sort((a, b) => a - b);
+    return d[0] <= 40 && d[1] >= 100;
+  };
+  const obstacles = parts.filter((p) => p.key !== 'room' && (p.key === 'facade' || isSlab(p)));
+  const N = 5;
+  for (const op of openers) {
+    if (op.kind !== 'door') continue;
+    const b = op.facade.box;
+    const pts = [];
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) for (let k = 0; k < N; k++) {
+      pts.push(new THREE.Vector3(
+        b.min.x + (b.max.x - b.min.x) * i / (N - 1),
+        b.min.y + (b.max.y - b.min.y) * j / (N - 1),
+        b.min.z + (b.max.z - b.min.z) * k / (N - 1)));
+    }
+    // Біля самої осі не перевіряємо: вісь у нас спрощена (кут фасаду), справжня петля відводить цей край від сусіда
+    const toAxis = (p) => p.clone().sub(op.pivot).projectOnPlane(op.axis).length();
+    for (let i = pts.length - 1; i >= 0; i--) if (toAxis(pts[i]) < 60) pts.splice(i, 1);
+    const reach = Math.max(op.facade.size.x, op.facade.size.y, op.facade.size.z) + 50;
+    const own = new Set(op.parts);
+    const obs = obstacles
+      .filter((o) => !own.has(o) && o.box.distanceToPoint(op.facade.center) < reach)
+      .map((o) => o.box.clone().expandByScalar(-2))
+      .filter((ob) => !ob.isEmpty() && !pts.some((p) => ob.containsPoint(p))); // уже дотичні в закритому стані — не перешкода
+    if (!obs.length) continue;
+    const maxDeg = THREE.MathUtils.radToDeg(op.maxAngle);
+    const q = new THREE.Vector3();
+    let free = maxDeg;
+    for (let deg = 2; deg <= maxDeg; deg += 2) {
+      const a = op.sign * THREE.MathUtils.degToRad(deg);
+      const hit = pts.some((p) => {
+        q.copy(p).sub(op.pivot).applyAxisAngle(op.axis, a).add(op.pivot);
+        return obs.some((ob) => ob.containsPoint(q));
+      });
+      if (hit) { free = deg - 2; break; }
+    }
+    op.maxAngle = THREE.MathUtils.degToRad(Math.max(15, free));
+  }
 }
 
 /** Завантажує GLB з ArrayBuffer і повертає модель з тим самим інтерфейсом, що й buildFurniture. */
@@ -746,7 +812,7 @@ export async function loadGltfModel(buffer, title) {
     const moving = openers.some((op) => op.now !== op.target);
     if (explodeNow === explodeGoal && !moving) return;
     explodeNow = towards(explodeNow, explodeGoal, dt);
-    for (const op of openers) op.now = towards(op.now, op.target, dt / OPEN_TIME);
+    for (const op of openers) op.now = towards(op.now, op.target, (dt / OPEN_TIME) * (op.speed || 1));
     for (const rec of meshes) {
       if (rec.part.key === 'room') continue; // стіни не рухаємо
       const ex = smooth(Math.min(1, Math.max(0, (explodeNow - rec.part.explodeDelay) / EXPLODE_TIME)));

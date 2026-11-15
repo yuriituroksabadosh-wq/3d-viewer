@@ -391,21 +391,27 @@ async function main() {
       // Фасади можуть перетинатися (кути, сусідні двері) — тому по одному: відчинився, постояв, зачинився, далі наступний
       const until = async (op, v) => { while (my === demoRun && op.now !== v) await wait(50); };
       model.setOpen(0);
-      for (const op of list) {
-        if (my !== demoRun) return;
-        await until(op, 0);
-        op.target = 1;
-        await until(op, 1);
-        await wait(500);
-        if (my !== demoRun) return;
-        op.target = 0;
-        await until(op, 0);
+      list.forEach((op) => { op.speed = 1.6; }); // у демо швидше, ніж при натисканні на фасад
+      try {
+        for (const op of list) {
+          if (my !== demoRun) return;
+          await until(op, 0);
+          op.target = 1;
+          await until(op, 1);
+          await wait(200);
+          if (my !== demoRun) return;
+          op.target = 0;
+          await until(op, 0);
+        }
+      } finally {
+        if (my === demoRun) list.forEach((op) => { op.speed = 1; });
       }
     }
     tool('anim', 'Анімація: натисніть на фасад, щоб відкрити; подвійне натискання — усі по черзі', ICONS.open, () => {
       const { doors, drawers } = model.openers;
       if (!doors && !drawers) { toast($('toast'), 'У моделі не знайдено дверей на петлях чи шухляд'); return; }
       demoRun++; // будь-яке натискання зупиняє демо
+      model.openerList.forEach((op) => { op.speed = 1; });
       // Подвійне натискання: демо «по черзі», режим анімації лишається увімкненим
       const now = Date.now();
       if (now - animTap < 400) {
