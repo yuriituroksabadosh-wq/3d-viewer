@@ -171,6 +171,12 @@ function el(tag, attrs, text) {
  * Креслення (вид з пласті А): контур, отвори, розмірні лінії з виносними від кожного отвору.
  * mode: 'base' — від бази (лівий нижній кут), 'chain' — ланцюжком.
  */
+/** Креслення деталі для PDF: усі отвори, розміри від бази; повертає SVG і групи отворів (колір → Ø, кількість). */
+export function partSvg(panel) {
+  const groups = groupsOf(panel);
+  return { svg: drawing(panel, groups, () => true, 'base'), groups: groups.map((g) => ({ color: g.color, title: holeTitle(g), where: g.t === 'E' ? 'торець' : g.t === 'B' ? 'пласть Б' : 'пласть А', n: g.items.length, th: !!g.th })) };
+}
+
 function drawing(panel, groups, isOn, mode) {
   const W = panel.w, Lh = panel.l;
   const fs = Math.max(W, Lh) / 22; // розмір цифр (у мм креслення)

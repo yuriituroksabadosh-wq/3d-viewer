@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "pdfjs-dist": "6.4.299",
+    "qrcode-generator": "2.0.4",
     "three": "0.169.0"
   },
   "devDependencies": {

@@ -3,8 +3,9 @@
 // штамп. Аркуші малюються на canvas і складаються в PDF (JPEG-сторінки) без сторонніх бібліотек.
 
 import * as THREE from 'three';
+import qrcode from 'qrcode-generator';
 import logoUrl from './assets/logo-m3.png';
-import { matchPanel } from './drill.js';
+import { matchPanel, partSvg, edgesOf, cutsOf } from './drill.js';
 
 const DPI = 150;
 const A4 = [Math.round(210 / 25.4 * DPI), Math.round(297 / 25.4 * DPI)]; // 1240 × 1754
@@ -13,7 +14,21 @@ const INK = '#1d1d1f';
 const LINE = '#7a7468';
 
 const fmt = (n) => (Math.round(n * 10) / 10).toString();
-const blockOfPanel = (p) => (p.path || []).filter((x) => x && x !== 'Модель')[0] || '';
+const pathOf = (p) => (p.path || []).filter((x) => x && x !== 'Модель');
+const blockOfPanel = (p) => pathOf(p)[0] || '';
+// Блок або під-блок: «МВ_4» чи «МВ_4 / Фасад Двійний» — префікс шляху в моделі БАЗИСу
+const SEP = ' / ';
+const inBlock = (path, name) => name.split(SEP).every((v, i) => path[i] === v);
+/** Під-блоки блоку (другий рівень шляху), у яких щонайменше дві плити. */
+function subBlocksOf(panels, block) {
+  const m = new Map();
+  for (const p of panels) {
+    const path = pathOf(p);
+    if (path[0] !== block || path.length < 2 || !(p.t > 0 && p.t <= 60)) continue;
+    m.set(path[1], (m.get(path[1]) || 0) + 1);
+  }
+  return [...m].filter(([, n]) => n >= 2).map(([s]) => block + SEP + s).sort((a, b) => a.localeCompare(b, 'uk', { numeric: true }));
+}
 const nameLines = (n) => String(n || '').split(/[\r\n]+/).map((s) => s.trim()).filter(Boolean);
 
 // ---------------- Дані блоку ----------------
@@ -21,7 +36,7 @@ const nameLines = (n) => String(n || '').split(/[\r\n]+/).map((s) => s.trim()).f
 function materialRows(panels, block) {
   const m = new Map();
   for (const p of panels) {
-    if (blockOfPanel(p) !== block || !(p.t > 0 && p.t <= 60)) continue;
+    if (!inBlock(pathOf(p), block) || !(p.t > 0 && p.t <= 60)) continue;
     const k = [p.mat, p.name, fmt(p.l), fmt(p.w), fmt(p.t)].join('|');
     if (!m.has(k)) m.set(k, { pos: [], mat: p.mat || '', name: p.name || '', n: 0, t: p.t, l: p.l, w: p.w });
     const r = m.get(k);
@@ -35,7 +50,7 @@ function materialRows(panels, block) {
 function hardwareRows(spec, block) {
   const m = new Map();
   for (const s of spec || []) {
-    if ((s.path || []).filter((x) => x && x !== 'Модель')[0] !== block) continue;
+    if (!inBlock(pathOf(s), block)) continue;
     const lines = nameLines(s.name);
     if (!lines.length || /^[\d\s.,xх×*]+$/i.test(lines.join(' '))) continue;
     const title = lines.length > 1 ? lines.slice(0, -1).join(' ') : lines[0];
@@ -72,6 +87,15 @@ function blockGroups(model, panels) {
 }
 
 function blockParts(model, name, panels) {
+  // Під-блок: плити батьківського блоку з цим шляхом + фурнітура в їхньому габариті
+  if (name.includes(SEP)) {
+    const all = blockParts(model, name.split(SEP)[0], panels);
+    const boards = all.filter((p) => { if (!p.board) return false; const dp = matchPanel(panels, p.box); return dp && inBlock(pathOf(dp), name); });
+    if (!boards.length) return [];
+    const bx = model.boxOf(boards).clone().expandByScalar(2);
+    const c = new THREE.Vector3();
+    return [...boards, ...all.filter((p) => !p.board && bx.containsPoint(p.box.getCenter(c)))];
+  }
   const map = blockGroups(model, panels);
   const g = map.byName.get(name);
   const own = g ? model.parts.filter((p) => p.group === g) : [];
@@ -224,7 +248,7 @@ function renderViews(viewer, model, panels, name, sz) {
     scene.background = new THREE.Color('#ffffff');
     if (floor) floor.visible = false;
     const box = model.boxOf(parts.filter((p) => p.board || p.key === 'facade').length ? parts.filter((p) => p.board || p.key === 'facade') : parts);
-    const g = blockGroups(model, panels).byName.get(name);
+    const g = blockGroups(model, panels).byName.get(name.split(SEP)[0]);
     const gc = box.getCenter(new THREE.Vector3());
     const bl = model.blocks.filter((b) => b.name === g?.name).sort((a, b2) => a.box.distanceToPoint(gc) - b2.box.distanceToPoint(gc))[0];
     const front = (bl?.facing || new THREE.Vector3(0, 0, 1)).clone().setY(0).normalize();
@@ -244,14 +268,17 @@ function renderViews(viewer, model, panels, name, sz) {
     show(() => true);
     out.closed = shot(camFor(box, iso, ...sz.closed, false), ...sz.closed);
 
-    show((p) => p.key !== 'facade' && !doorParts.has(p));
+    // Фасади ховаємо, лише якщо в блоці є корпус (під-блок «Фасад Двійний» — самі фасади, їх лишаємо)
+    const isFront = (p) => p.key === 'facade' || doorParts.has(p);
+    const hideFronts = parts.some((p) => p.board && !isFront(p));
+    show((p) => !hideFronts || !isFront(p));
     const [vw, vh] = sz.open;
     const camOpen = camFor(box, iso, vw, vh, false);
     out.open = shot(camOpen, vw, vh);
     // Позиції деталей (ArtPos з БАЗИСу): ID-рендер — кожна деталь своїм кольором, номер ставимо
     // в найглибшу ВИДИМУ точку деталі (максимум відстані до її межі на картинці). Невидимі — без номера на виді.
     out.marks = idMarks(r, scene, camOpen, vw, vh, recs, (p) => {
-      if (!p.board || p.key === 'facade' || doorParts.has(p)) return null;
+      if (!p.board || (hideFronts && isFront(p))) return null;
       const dp = matchPanel(panels, p.box);
       return dp && dp.art ? String(dp.art) : null;
     });
@@ -281,6 +308,44 @@ function renderViews(viewer, model, panels, name, sz) {
     const at = (h, yv, axis) => { const p = c0.clone(); p.y = yv; p[axis] = h; return p; };
     out.frontDims = { proj: proj(camFront, ...sz.front), at: (h, yv) => at(h, yv, hAxis), ys: uniq(ys), hs: uniq(hs) };
     out.sideDims = { proj: proj(camSide, ...sz.side), at: (h, yv) => at(h, yv, dAxis), ys: [box.min.y, box.max.y], hs: uniq(ds) };
+
+    // Схема складання: блок розібраний (як кнопка «Розібрати»), номери позицій на всіх плитах разом із фасадами
+    if (sz.exploded) {
+      model.setViewMode('real-lines');
+      show(() => true);
+      // Власне розбирання блоку: кожна деталь відсувається від центру блоку (×0.7 відстані до центру),
+      // кріплення — так само за своїм центром, тож лишаються між деталями, які з'єднують
+      const bc = box.getCenter(new THREE.Vector3());
+      const moved = [];
+      const wp = new THREE.Vector3(), lp = new THREE.Vector3();
+      for (const p of parts) {
+        const off = p.box.getCenter(new THREE.Vector3()).sub(bc).multiplyScalar(0.7);
+        for (const rec of p.meshes) {
+          const m = rec.mesh;
+          m.updateWorldMatrix(true, false);
+          m.getWorldPosition(wp);
+          lp.copy(wp).add(off);
+          if (m.parent) { m.parent.updateWorldMatrix(true, false); m.parent.worldToLocal(lp); }
+          moved.push([m, m.position.clone()]);
+          m.position.copy(lp);
+          m.updateMatrixWorld(true);
+        }
+      }
+      try {
+        const eb = new THREE.Box3();
+        for (const p of parts) if (p.board || p.key === 'facade') for (const rec of p.meshes) eb.expandByObject(rec.mesh);
+        const [ew, eh] = sz.exploded;
+        const camEx = camFor(eb, iso, ew, eh, false);
+        out.exploded = shot(camEx, ew, eh);
+        out.explodedMarks = idMarks(r, scene, camEx, ew, eh, recs, (p) => {
+          if (!p.board) return null;
+          const dp = matchPanel(panels, p.box);
+          return dp && dp.art ? String(dp.art) : null;
+        });
+      } finally {
+        for (const [m, pos] of moved) { m.position.copy(pos); m.updateMatrixWorld(true); }
+      }
+    }
   } finally {
     r.dispose();
     model.setViewMode(savedMode);
@@ -347,18 +412,33 @@ const textCells = (ctx, vals, bold = []) => (r, xs, y, rh, f, right) => {
   });
 };
 
-function stamp(ctx, W, H, M, logo, info, block, page, pages) {
+/** QR-код посилання (чорні квадрати на білому). */
+function drawQr(ctx, url, x, y, size) {
+  const q = qrcode(0, 'M');
+  q.addData(url);
+  q.make();
+  const n = q.getModuleCount(), cell = size / (n + 2);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(x, y, size, size);
+  ctx.fillStyle = '#000';
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) ctx.fillRect(x + (c + 1) * cell, y + (r + 1) * cell, cell + 0.3, cell + 0.3);
+}
+
+function stamp(ctx, W, H, M, logo, info, block, page, pages, url) {
   const h = STAMP_H, y = H - M - h, x = M, w = W - 2 * M;
   ctx.strokeStyle = INK;
   ctx.lineWidth = 2;
   ctx.strokeRect(x, y, w, h);
-  const c1 = x + 200, c3 = x + w - 210;
+  const c1 = x + 200, c3 = x + w - 210 - (url ? h : 0);
   ctx.beginPath();
   ctx.moveTo(c1, y); ctx.lineTo(c1, y + h);
   ctx.moveTo(c3, y); ctx.lineTo(c3, y + h);
   ctx.moveTo(c1, y + h / 2); ctx.lineTo(c3, y + h / 2);
-  ctx.moveTo(c3, y + h / 2); ctx.lineTo(x + w, y + h / 2);
+  ctx.moveTo(c3, y + h / 2); ctx.lineTo(c3 + 210, y + h / 2);
+  if (url) { ctx.moveTo(c3 + 210, y); ctx.lineTo(c3 + 210, y + h); }
   ctx.stroke();
+  // QR: відкриває цей блок у 3D на телефоні
+  if (url) drawQr(ctx, url, c3 + 210 + 4, y + 4, h - 8);
   if (logo) {
     const s = Math.min(130 / logo.width, (h - 16) / logo.height);
     ctx.drawImage(logo, x + 10, y + (h - logo.height * s) / 2, logo.width * s, logo.height * s);
@@ -561,7 +641,7 @@ function titlePage(viewer, model, names, info, panels) {
   r.toneMapping = viewer.renderer.toneMapping;
   r.toneMappingExposure = viewer.renderer.toneMappingExposure;
   r.outputColorSpace = viewer.renderer.outputColorSpace;
-  let img, marks;
+  let img, marks, frameBox = [0, 0, RW, RH];
   try {
     model.setFocus(null);
     model.select([]);
@@ -570,11 +650,37 @@ function titlePage(viewer, model, names, info, panels) {
     scene.background = new THREE.Color('#ffffff');
     if (floor) floor.visible = false;
     model.setViewMode('real-lines');
-    for (const [m, p] of recs) m.visible = p.key !== 'room';
+    // Разом із приміщенням (стіни, підлога); кадр — за меблями, стіни довкола обрізаються
+    for (const [m] of recs) m.visible = true;
     const box = model.boxOf(model.parts.filter((p) => p.key !== 'room'));
     const dir = new THREE.Vector3(...(model.bounds?.viewDir || [0.6, 0.35, 1])).normalize();
     const cam = camFor(box, dir, RW, RH, false);
+    // Межі меблів на картинці — для обрізання
+    let fx0 = RW, fy0 = RH, fx1 = 0, fy1 = 0;
+    for (let i = 0; i < 8; i++) {
+      const v = new THREE.Vector3(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).project(cam);
+      const px2 = (v.x + 1) / 2 * RW, py2 = (1 - v.y) / 2 * RH;
+      fx0 = Math.min(fx0, px2); fx1 = Math.max(fx1, px2); fy0 = Math.min(fy0, py2); fy1 = Math.max(fy1, py2);
+    }
+    frameBox = [fx0, fy0, fx1, fy1];
     r.setSize(RW, RH, false);
+    // Спершу без приміщення — знайти, де на картинці меблі (не-білі пікселі)
+    for (const [m, p] of recs) m.visible = p.key !== 'room';
+    r.render(scene, cam);
+    {
+      const scan = document.createElement('canvas');
+      scan.width = RW; scan.height = RH;
+      const sc = scan.getContext('2d');
+      sc.drawImage(r.domElement, 0, 0);
+      const px = sc.getImageData(0, 0, RW, RH).data;
+      let x0 = RW, y0 = RH, x1 = 0, y1 = 0;
+      for (let yy = 0; yy < RH; yy += 2) for (let xx = 0; xx < RW; xx += 2) {
+        const k = (yy * RW + xx) * 4;
+        if (px[k] < 245 || px[k + 1] < 245 || px[k + 2] < 245) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (yy < y0) y0 = yy; if (yy > y1) y1 = yy; }
+      }
+      if (x1 > x0 && y1 > y0) frameBox = [x0, y0, x1, y1];
+    }
+    for (const [m] of recs) m.visible = true;
     r.render(scene, cam);
     img = document.createElement('canvas');
     img.width = RW; img.height = RH;
@@ -603,16 +709,12 @@ function titlePage(viewer, model, names, info, panels) {
   ctx.fillStyle = '#6f685c';
   ctx.font = `600 18px ${FONT}`;
   ctx.fillText(`Блоків: ${names.length}`, M, M + 62);
-  // Обрізати білі поля навколо виробу, щоб він зайняв увесь аркуш
-  const px = img.getContext('2d').getImageData(0, 0, RW, RH).data;
-  let x0 = RW, y0 = RH, x1 = 0, y1 = 0;
-  for (let yy = 0; yy < RH; yy += 2) for (let xx = 0; xx < RW; xx += 2) {
-    const k = (yy * RW + xx) * 4;
-    if (px[k] < 245 || px[k + 1] < 245 || px[k + 2] < 245) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (yy < y0) y0 = yy; if (yy > y1) y1 = yy; }
-  }
+  // Обрізати до меблів (+ запас, щоб було видно приміщення довкола)
+  let [x0, y0, x1, y1] = frameBox;
+  const padX = (x1 - x0) * 0.08, padY = (y1 - y0) * 0.08;
+  x0 = Math.max(0, Math.floor(x0 - padX)); y0 = Math.max(0, Math.floor(y0 - padY));
+  x1 = Math.min(RW, Math.ceil(x1 + padX)); y1 = Math.min(RH, Math.ceil(y1 + padY));
   if (x1 <= x0 || y1 <= y0) { x0 = 0; y0 = 0; x1 = RW; y1 = RH; }
-  const padC = 30;
-  x0 = Math.max(0, x0 - padC); y0 = Math.max(0, y0 - padC); x1 = Math.min(RW, x1 + padC); y1 = Math.min(RH, y1 + padC);
   const cw = x1 - x0, ch = y1 - y0;
   const s = Math.min(vw / cw, vh / ch);
   const ix = M + (vw - cw * s) / 2 - x0 * s, iy = M + head + (vh - ch * s) / 2 - y0 * s;
@@ -855,8 +957,118 @@ export function sheetBlocks(model, panels) {
     .sort((a, b) => a.localeCompare(b, 'uk', { numeric: true }));
 }
 
+
+// ---------------- Схема складання і деталювання ----------------
+/** Схема складання: розібраний блок на весь аркуш, номери позицій на деталях. */
+function assemblyPage(views) {
+  const [W, H] = [A4[1], A4[0]];
+  const M = 40, stampTop = H - M - STAMP_H - 12;
+  const pages = [];
+  const ctx = newPageFn(pages, W, H, M)();
+  viewBox(ctx, views.exploded, M, M, W - 2 * M, stampTop - M, 'Схема складання · розібраний блок, номери — позиції деталей', views.explodedMarks);
+  return pages[0];
+}
+
+/** SVG → картинка заданої ширини (для креслення деталі на аркуші). */
+async function svgImage(svg, w) {
+  const vb = (svg.getAttribute('viewBox') || '0 0 100 100').split(/[\s,]+/).map(Number);
+  svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  svg.setAttribute('width', String(w));
+  svg.setAttribute('height', String(Math.round(w * vb[3] / vb[2])));
+  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' }));
+  const im = await loadImg(url);
+  URL.revokeObjectURL(url);
+  return im;
+}
+
+/** Деталі блоку для деталювання: однакові — одним кресленням з кількістю; деталі під-блоків — у під-блоці. */
+function detailList(panels, name, subs) {
+  const subSet = new Set(subs.map((s) => s.split(SEP)[1]));
+  const m = new Map();
+  for (const p of panels) {
+    const path = pathOf(p);
+    if (!inBlock(path, name) || !(p.t > 0 && p.t <= 60)) continue;
+    if (!name.includes(SEP) && path.length >= 2 && subSet.has(path[1])) continue;
+    const k = [p.art, p.name, p.mat, fmt(p.l), fmt(p.w), fmt(p.t)].join('|');
+    if (!m.has(k)) m.set(k, { p, n: 0 });
+    m.get(k).n++;
+  }
+  return [...m.values()].sort((a, b) => (parseFloat(a.p.art) || 1e9) - (parseFloat(b.p.art) || 1e9));
+}
+
+/** Деталювання: 4 деталі на альбомному аркуші — креслення з розмірами, крайкою, отворами, пазами; легенда під ним. */
+async function detailPages(list) {
+  const [W, H] = [A4[1], A4[0]];
+  const M = 40, stampTop = H - M - STAMP_H - 12, gap = 12;
+  const cw = (W - 2 * M - gap) / 2, chh = (stampTop - M - gap) / 2;
+  const pages = [];
+  const newPage = newPageFn(pages, W, H, M);
+  let ctx = null;
+  for (let i = 0; i < list.length; i++) {
+    const { p, n } = list[i];
+    if (i % 4 === 0) ctx = newPage();
+    const x = M + (i % 2) * (cw + gap), y = M + (Math.floor(i / 2) % 2) * (chh + gap);
+    ctx.strokeStyle = '#d9d2c5';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, cw, chh);
+    ctx.fillStyle = INK;
+    ctx.font = `800 19px ${FONT}`;
+    ctx.fillText(fit(ctx, `Поз. ${p.art || '—'} · ${p.name || 'Деталь'}`, cw - 120), x + 10, y + 24);
+    ctx.textAlign = 'right';
+    ctx.fillText(`К-сть ${n}`, x + cw - 10, y + 24);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#6f685c';
+    ctx.font = `600 13px ${FONT}`;
+    ctx.fillText(fit(ctx, `${fmt(p.l)} × ${fmt(p.w)} × ${fmt(p.t)} мм · ${p.mat || ''}`, cw - 20), x + 10, y + 44);
+    // Легенда: крайка, отвори, пази, текстура
+    const { svg, groups } = partSvg(p);
+    const ed = edgesOf(p), cuts = cutsOf(p);
+    const items = [];
+    for (const k of ed.kinds) items.push({ color: k.color, bar: true, t: `крайка ${fmt(k.t)}` });
+    for (const g of groups) items.push({ color: g.color, t: `${g.title} ${g.th ? 'наскрізь' : g.where} ×${g.n}` });
+    const seenC = new Set();
+    for (const c of cuts) {
+      const t = `${c.name} ${fmt(c.width)}×${fmt(c.depth)} ${c.side === 'A' ? 'пл. А' : c.side === 'B' ? 'пл. Б' : 'наскрізь'}${c.inside ? '' : ' ⚠'}`;
+      if (!seenC.has(t)) { seenC.add(t); items.push({ color: '#8a6d3b', t }); }
+    }
+    if (p.tex === 1 || p.tex === 2) items.push({ color: '#6b4f24', t: p.tex === 1 ? 'текстура ↔' : 'текстура ↕' });
+    ctx.font = `600 12px ${FONT}`;
+    const rows = [];
+    let line = [], lw = 0;
+    for (const it of items) {
+      const iw = ctx.measureText(it.t).width + 30;
+      if (lw + iw > cw - 20 && line.length) { rows.push(line); line = []; lw = 0; }
+      line.push({ ...it, iw });
+      lw += iw;
+    }
+    if (line.length) rows.push(line);
+    const legendH = rows.length * 18 + 6;
+    rows.forEach((row, ri) => {
+      let lx = x + 10;
+      const ly = y + chh - legendH + ri * 18 + 12;
+      for (const it of row) {
+        ctx.fillStyle = it.color;
+        if (it.bar) ctx.fillRect(lx, ly - 4, 18, 6);
+        else { ctx.beginPath(); ctx.arc(lx + 8, ly - 1, 5, 0, Math.PI * 2); ctx.fill(); }
+        ctx.fillStyle = INK;
+        ctx.fillText(it.t, lx + 24, ly + 3);
+        lx += it.iw;
+      }
+    });
+    // Креслення
+    const top = y + 54, area = { w: cw - 16, h: chh - 54 - legendH - 8 };
+    const im = await svgImage(svg, Math.round(area.w * 1.6));
+    if (im) {
+      const s = Math.min(area.w / im.width, area.h / im.height);
+      ctx.drawImage(im, x + 8 + (area.w - im.width * s) / 2, top + (area.h - im.height * s) / 2, im.width * s, im.height * s);
+    }
+  }
+  return pages;
+}
+
 /**
- * PDF: спершу загальна специфікація (якщо блоків кілька або general), далі по аркушу на блок.
+ * PDF: титульний і загальна специфікація (якщо блоків кілька або general), далі на кожен блок —
+ * аркуш блоку, схема складання, деталювання; одразу за блоком — так само кожен його під-блок.
  * onStep(i, всього) — для показу прогресу.
  */
 export async function makeBlockPdf({ viewer, model, panels, names, onStep, general = names.length > 1 }) {
@@ -866,33 +1078,47 @@ export async function makeBlockPdf({ viewer, model, panels, names, onStep, gener
   const hw = new Map();
   await Promise.all(codes.map(async (c) => { const im = await loadImg(`${import.meta.env.BASE_URL}data/hw/${c}.jpg`); if (im) hw.set(c, im); }));
   const assets = { hw };
+  // Посилання для QR: ця модель на сайті; для блоку — ще точка його центру (відкриється саме він)
+  const slug = new URLSearchParams(location.search).get('model');
+  const base = slug ? `${location.origin}${location.pathname}?model=${encodeURIComponent(slug)}` : null;
   const docs = [];
   if (general) {
-    docs.push({ name: TITLE, pages: [titlePage(viewer, model, names, info, panels)] });
-    docs.push({ name: GENERAL, pages: generalPages(panels, names, info, assets) });
+    docs.push({ name: TITLE, pages: [titlePage(viewer, model, names, info, panels)], url: base });
+    docs.push({ name: GENERAL, pages: generalPages(panels, names, info, assets), url: base });
   }
-  for (let i = 0; i < names.length; i++) {
-    onStep?.(i, names.length);
+  const list = names.flatMap((n) => { const subs = subBlocksOf(panels, n); return [{ name: n, subs }, ...subs.map((s) => ({ name: s, subs: [] }))]; });
+  const [LW, LH] = [A4[1], A4[0]];
+  for (let i = 0; i < list.length; i++) {
+    const { name, subs } = list[i];
+    onStep?.(i, list.length);
     await new Promise((r) => setTimeout(r, 30)); // дати кнопці перемалюватись
-    const bp = blockParts(model, names[i], panels);
+    const bp = blockParts(model, name, panels);
     if (!bp.length) continue;
-    const mats = materialRows(panels, names[i]);
-    const hws = hardwareRows(panels.spec, names[i]);
+    const mats = materialRows(panels, name);
+    const hws = hardwareRows(panels.spec, name);
     const L = layout(model.boxOf(bp).getSize(new THREE.Vector3()), Math.max(mats.length, Math.ceil(hws.length * 1.4)));
     // Рендер у пропорціях комірки з запасом різкості ×1.4 (вид з позиціями — мінус поля під виноски)
     const px = (c, padX, padY) => [Math.round((c.w - padX) * 1.4), Math.round((c.h - padY) * 1.4)];
-    const sz = { open: px(L.cells.open, 92, 92), closed: px(L.cells.closed, 16, 34), front: px(L.cells.front, 74, 82), side: px(L.cells.side, 74, 82) };
-    const views = renderViews(viewer, model, panels, names[i], sz);
+    const sz = {
+      open: px(L.cells.open, 92, 92), closed: px(L.cells.closed, 16, 34), front: px(L.cells.front, 74, 82), side: px(L.cells.side, 74, 82),
+      exploded: [Math.round((LW - 80 - 92) * 1.2), Math.round((LH - 40 - STAMP_H - 12 - 40 - 92) * 1.2)],
+    };
+    const views = renderViews(viewer, model, panels, name, sz);
     if (!views) continue;
     views.layout = L;
-    docs.push({ name: names[i], pages: blockPages(views, names[i], mats, hws, assets) });
+    const pages = blockPages(views, name, mats, hws, assets);
+    if (views.exploded) pages.push(assemblyPage(views));
+    pages.push(...await detailPages(detailList(panels, name, subs)));
+    const boards = bp.filter((p) => p.board);
+    const bc = model.boxOf(boards.length ? boards : bp).getCenter(new THREE.Vector3());
+    docs.push({ name, pages, url: base ? `${base}&at=${[bc.x, bc.y, bc.z].map(Math.round).join(',')}` : null });
   }
   const all = docs.flatMap((d) => d.pages);
   // Штамп — після того, як відомо, скільки аркушів
   let k = 0;
   for (const d of docs) for (const c of d.pages) {
     k++;
-    stamp(c.getContext('2d'), c.width, c.height, 40, logo, info, d.name, k, all.length);
+    stamp(c.getContext('2d'), c.width, c.height, 40, logo, info, d.name, k, all.length, d.url);
   }
   if (import.meta.env.DEV) window.__sheets = all; // лише для перевірки локально
   return pdfFromCanvases(all);

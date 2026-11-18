@@ -206,6 +206,23 @@ async function main() {
   $('loader-fill').style.width = '100%';
   $('loader').classList.add('done');
   if (!SHOT) viewer.intro();
+  // QR з виробничого аркуша: ?at=x,y,z — показати лише блок, у якому ця точка (найменший за об'ємом)
+  const atParam = new URLSearchParams(location.search).get('at');
+  if (atParam && isGlbModel && !SHOT) {
+    const [ax, ay, az] = atParam.split(',').map(Number);
+    if ([ax, ay, az].every(Number.isFinite)) {
+      const pt = model.bounds.center.clone().set(ax, ay, az);
+      let best = null;
+      for (const g of new Set(model.parts.filter((p) => p.group && p.key !== 'room').map((p) => p.group))) {
+        const b = model.boxOf(g.parts);
+        if (!b.clone().expandByScalar(5).containsPoint(pt)) continue;
+        const s = b.getSize(pt.clone());
+        const vol = s.x * s.y * s.z;
+        if (!best || vol < best.vol) best = { g, b, vol };
+      }
+      if (best) setTimeout(() => { model.isolate(best.g); refreshTools(); viewer.focusBox(best.b); }, 1700);
+    }
+  }
   if (!SHOT) notify('open', name, $('title').textContent, tg);
 
   // ---- Вибір деталі або цілого блоку ----

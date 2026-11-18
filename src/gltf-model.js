@@ -1165,6 +1165,7 @@ export async function loadGltfModel(buffer, title) {
     get viewMode() { return mode; },
     get hasHidden() { return hiddenParts.size > 0 || !!isolated; },
     setExplode(t) { explodeTarget = Math.min(1, Math.max(0, t)); },
+    get explodeTarget() { return explodeTarget; },
     /** Габарит меблів у повністю розібраному стані — щоб камера відійшла й усе влізло. */
     explodedBox() {
       const b = new THREE.Box3();
