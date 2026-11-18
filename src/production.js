@@ -4,6 +4,7 @@
 import { openSheet } from './extras.js';
 import { edgesOf, cutsOf, showDrill } from './drill.js';
 import { makeBlockPdf, sheetBlocks } from './block-sheet.js';
+import { NOTIFY_URL } from './notify.js';
 
 const fmt = (n) => (Math.round(n * 10) / 10).toString();
 
@@ -139,16 +140,29 @@ export function showProduction(panels, ctx) {
     const label = b.textContent;
     try {
       const blob = await makeBlockPdf({ ...ctx, panels, names, onStep: (i, n) => { b.textContent = `Аркуш ${i + 1} з ${n}…`; } });
+      const fileName = `Аркуші — ${names.length === 1 ? names[0] : [panels.info?.name, (panels.info?.prefix || '').trim()].filter(Boolean).join(' ') || 'виріб'}.pdf`;
+      const tg = window.Telegram?.WebApp;
+      if (tg?.initData) {
+        // У Telegram завантаження з сайту не працює — бот надсилає PDF у чат менеджеру
+        b.textContent = 'Надсилаю в чат…';
+        const head = new TextEncoder().encode(JSON.stringify({ initData: tg.initData, name: fileName }) + '\n');
+        const r = await fetch(`${NOTIFY_URL}/sheetpdf`, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: new Blob([head, blob]) })
+          .then((x) => x.json()).catch(() => null);
+        const msg = r?.ok ? 'PDF надіслано в чат бота.' : 'Не вдалося надіслати PDF у чат.';
+        if (tg.showAlert) tg.showAlert(msg); else alert(msg);
+        return;
+      }
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `Аркуші — ${names.length === 1 ? names[0] : (panels.info?.name || 'виріб')}.pdf`;
+      a.download = fileName;
       document.body.append(a);
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 60000);
     } catch (err) {
       console.error('Аркуші:', err);
-      alert('Не вдалося зробити PDF: ' + (err.message || err));
+      const msg = 'Не вдалося зробити PDF: ' + (err.message || err);
+      if (window.Telegram?.WebApp?.showAlert) window.Telegram.WebApp.showAlert(msg); else alert(msg);
     } finally { busy = false; b.textContent = label; }
   };
 

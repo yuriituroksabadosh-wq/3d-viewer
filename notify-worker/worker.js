@@ -301,6 +301,28 @@ async function drillKey(request, env) {
   return json({ ok: true, key }, { ...cors(origin), 'Cache-Control': 'no-store' });
 }
 
+// ---------- Аркуші блоків PDF: у Telegram завантаження з сайту не працює — надсилаємо менеджеру документом ----------
+// Тіло: перший рядок — JSON { initData, name }, далі байти PDF. Лише менеджеру (CHAT_ID), за підписом Telegram.
+async function sheetPdf(request, env) {
+  const origin = request.headers.get('Origin') || '';
+  if (!ALLOWED_ORIGINS.includes(origin)) return new Response('Forbidden', { status: 403 });
+  const buf = new Uint8Array(await request.arrayBuffer());
+  const nl = buf.indexOf(10);
+  if (nl < 0 || nl > 8192 || buf.length > 45 * 1024 * 1024) return new Response('Bad request', { status: 400, headers: cors(origin) });
+  let head;
+  try { head = JSON.parse(new TextDecoder().decode(buf.subarray(0, nl))); } catch { return new Response('Bad request', { status: 400, headers: cors(origin) }); }
+  const u = await verifiedUser(head.initData, env.BOT_TOKEN);
+  if (!u || String(u.id) !== String(env.CHAT_ID)) return json({ ok: false }, cors(origin));
+  const pdf = buf.subarray(nl + 1);
+  if (new TextDecoder().decode(pdf.subarray(0, 5)) !== '%PDF-') return json({ ok: false, error: 'not pdf' }, cors(origin));
+  const name = String(head.name || 'Аркуші.pdf').replace(/[\\/:*?"<>|\r\n]+/g, ' ').slice(0, 120);
+  const fd = new FormData();
+  fd.append('chat_id', String(env.CHAT_ID));
+  fd.append('document', new Blob([pdf], { type: 'application/pdf' }), /\.pdf$/i.test(name) ? name : name + '.pdf');
+  const r = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendDocument`, { method: 'POST', body: fd });
+  return json({ ok: r.ok }, { ...cors(origin), 'Cache-Control': 'no-store' });
+}
+
 // ---------- Файли моделей (GLB, КП, присадка) — у KV замість git ----------
 // Так репозиторій не розростається, а відміна видаляє файли насправді. Ключ KV: f:<файл>.
 // Читати — будь-кому (як і сайт); записувати й видаляти — лише з ключем менеджера (REVOKE_KEY).
@@ -344,6 +366,7 @@ export default {
     if (path === '/revoke' && request.method === 'POST') return revoke(request, env);
     if (path === '/tg' && request.method === 'POST') return onUpdate(request, env);
     if (path === '/drillkey' && request.method === 'POST') return drillKey(request, env);
+    if (path === '/sheetpdf' && request.method === 'POST') return sheetPdf(request, env);
     return onEvent(request, env);
   },
   async scheduled(event, env, ctx) {
