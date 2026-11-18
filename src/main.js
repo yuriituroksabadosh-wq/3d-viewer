@@ -25,6 +25,21 @@ const FACADE_COLORS = [
   { name: 'Сірий', hex: '#9da3a8' },
 ];
 
+// Telegram тримає сайт у кеші й показує стару збірку. Якщо на сервері новіша — один раз перезавантажити
+// з іншою адресою (кеш не спрацює). Хеш (#tgWebAppData… — підпис Telegram) зберігається.
+if (!import.meta.env.DEV) {
+  const mine = [...document.scripts].map((s) => s.src).find((s) => /assets\/index-[^/]+\.js/.test(s)) || '';
+  fetch(`${location.pathname}?fresh=${Date.now()}`, { cache: 'no-store' }).then((r) => r.text()).then((html) => {
+    const cur = (html.match(/assets\/index-[^"']+\.js/) || [])[0];
+    if (!cur || !mine || mine.includes(cur)) return;
+    const key = 'm3-fresh-' + cur;
+    try { if (sessionStorage.getItem(key)) return; sessionStorage.setItem(key, '1'); } catch { return; }
+    const u = new URL(location.href);
+    u.searchParams.set('v', Date.now().toString(36));
+    location.replace(u.toString());
+  }).catch(() => {});
+}
+
 const DEFAULT_MODEL = 'sample-cabinet';
 const $ = (id) => document.getElementById(id);
 
