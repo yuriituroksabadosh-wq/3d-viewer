@@ -66,6 +66,8 @@ export function showPartsList(parts, describe, onPick) {
   const list = h('div', { class: 'parts-list' });
   const count = h('div', { class: 'hint' });
 
+  // Блоки згорнуті: натиск на назву блоку розкриває його. Під час пошуку розкрито все знайдене.
+  const open = new Set();
   function render() {
     const q = search.value.trim().toLowerCase();
     list.replaceChildren();
@@ -73,6 +75,12 @@ export function showPartsList(parts, describe, onPick) {
     for (const [name, items] of groups) {
       const match = items.filter((p) => !q || `${p.name.title} ${p.name.article} ${name}`.toLowerCase().includes(q));
       if (!match.length) continue;
+      const expanded = !!q || open.has(name) || groups.size === 1;
+      list.append(h('button', {
+        class: `parts-group${expanded ? ' open' : ''}`, type: 'button', 'aria-expanded': String(expanded),
+        onclick: () => { if (q) return; if (open.has(name)) open.delete(name); else open.add(name); render(); },
+      }, h('span', { class: 'parts-caret' }, '›'), h('span', { class: 'parts-gname' }, name), h('span', { class: 'parts-count' }, String(match.length))));
+      if (!expanded) { shown += match.length; continue; }
       // Однакові деталі (шканти, конфірмати) згортаємо в один рядок з кількістю
       const same = new Map();
       for (const p of match) {
@@ -81,7 +89,6 @@ export function showPartsList(parts, describe, onPick) {
         if (!same.has(key)) same.set(key, { part: p, d, n: 0 });
         same.get(key).n++;
       }
-      list.append(h('div', { class: 'parts-group' }, `${name} · ${match.length}`));
       for (const { part, d, n } of same.values()) {
         shown += n;
         list.append(h('button', { class: 'parts-item', type: 'button', onclick: () => { close(); onPick(part); } },

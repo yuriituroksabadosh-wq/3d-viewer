@@ -909,7 +909,10 @@ export async function loadGltfModel(buffer, title) {
     repaint();
   }
 
+  let focus = null; // Set деталей, що лишаються суцільними (вибір зі списку), або null
   function baseMaterial(rec) {
+    // Деталь вибрана зі списку: решта моделі — прозора, як у рентгені
+    if (focus && !focus.has(rec.part)) return XRAY_PANEL;
     if (mode === "lines") return LINES_FILL;
     if (mode === "xray") {
       if (isBoard(rec.part)) return XRAY_PANEL;
@@ -962,6 +965,13 @@ export async function loadGltfModel(buffer, title) {
     for (const p of selection) applyHighlight(p);
   }
   const highlight = (part) => select(part ? [part] : []);
+  /** Рентген навколо деталей: list — що лишається суцільним, null — вимкнути. */
+  function setFocus(list) {
+    const next = list && list.length ? new Set(list) : null;
+    if (!next && !focus) return;
+    focus = next;
+    repaint();
+  }
 
   // ---- Матеріали моделі: заміна для фасадів, корпусу, стільниці (лише ті матеріали, що є в моделі) ----
   const matName = (m) => splitName(m?.name || '').title;
@@ -1131,6 +1141,7 @@ export async function loadGltfModel(buffer, title) {
     update,
     highlight,
     select,
+    setFocus,
     get selection() { return selection; },
     pick,
     find,

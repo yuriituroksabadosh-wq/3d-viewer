@@ -253,10 +253,13 @@ async function main() {
 
   const selectedParts = () => (!current ? [] : blockMode && isGlbModel ? current.group.parts : [current]);
 
-  function selectPart(part) {
+  /** xray: true — вибір зі списку, решта моделі стає прозорою (знімається наступним вибором чи натиском повз). */
+  function selectPart(part, xray = false) {
     current = part;
-    if (isGlbModel) model.select(selectedParts());
-    else model.highlight(part);
+    if (isGlbModel) {
+      model.select(selectedParts());
+      model.setFocus(xray && part ? selectedParts() : null);
+    } else model.highlight(part);
     refreshInfo();
     refreshTools();
     refreshDims();
@@ -742,7 +745,7 @@ async function main() {
       icon: '☰',
       onClick: () => showPartsList(model.parts, (p) => model.describe(p), (part) => {
         if (!isVisiblePart(part)) model.showAll();
-        selectPart(part);
+        selectPart(part, true);
         viewer.focusBox(model.boxOf(selectedParts()));
       }),
     },
