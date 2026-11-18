@@ -253,12 +253,12 @@ async function main() {
 
   const selectedParts = () => (!current ? [] : blockMode && isGlbModel ? current.group.parts : [current]);
 
-  /** xray: true — вибір зі списку, решта моделі стає прозорою (знімається наступним вибором чи натиском повз). */
-  function selectPart(part, xray = false) {
+  /** Вибрана деталь показується рентгеном: сама прозора, кріплення й фурнітура в ній видно крізь усе. */
+  function selectPart(part) {
     current = part;
     if (isGlbModel) {
       model.select(selectedParts());
-      model.setFocus(xray && part ? selectedParts() : null);
+      model.setFocus(part ? selectedParts() : null);
     } else model.highlight(part);
     refreshInfo();
     refreshTools();
@@ -745,7 +745,7 @@ async function main() {
       icon: '☰',
       onClick: () => showPartsList(model.parts, (p) => model.describe(p), (part) => {
         if (!isVisiblePart(part)) model.showAll();
-        selectPart(part, true);
+        selectPart(part);
         viewer.focusBox(model.boxOf(selectedParts()));
       }),
     },

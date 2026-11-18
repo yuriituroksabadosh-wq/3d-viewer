@@ -58,8 +58,9 @@ export function createViewer(canvas) {
   controls.screenSpacePanning = true;
   controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
   controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
-  controls.minPolarAngle = 0.2;             // не дає піти на саму гору
-  controls.maxPolarAngle = Math.PI / 2 - 0.05; // камера не опускається під підлогу
+  // Крутити можна повністю: від виду строго зверху до виду строго знизу (підлога сцени знизу прозора)
+  controls.minPolarAngle = 0.001;
+  controls.maxPolarAngle = Math.PI - 0.001;
 
   // Початковий вигляд: спереду справа зверху (запам'ятовується для «Скинути вид»)
   const home = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
