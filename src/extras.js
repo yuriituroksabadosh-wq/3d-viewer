@@ -38,7 +38,7 @@ export function createMenu(button, items) {
     e.stopPropagation();
     if (menu) { close(); return; }
     menu = h('div', { class: 'menu', role: 'menu' },
-      ...items.filter(Boolean).map((it) => h('button', {
+      ...(typeof items === 'function' ? items() : items).filter(Boolean).map((it) => h('button', {
         class: 'menu-item', type: 'button', role: 'menuitem',
         onclick: () => { close(); it.onClick(); },
       }, h('span', { class: 'menu-icon' }, it.icon || ''), it.label)),

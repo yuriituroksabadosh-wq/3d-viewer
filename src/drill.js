@@ -107,6 +107,54 @@ function spread(vals, gap) {
   return out;
 }
 
+// ---------------- Виробництво: крайка, пази, текстура ----------------
+const EDGE_COLORS = ['#2f6fd6', '#e0592a', '#1f9d55', '#9b4dca', '#c9a227'];
+/** Сторона контуру для відрізка прямокутної деталі: L/R — по довжині (вертикальні), D/U — по ширині. */
+function sideOf(s, W, Lh) {
+  const e = 0.6;
+  if (Math.abs(s[0] - s[2]) < e && Math.abs(s[0]) < e) return 'L';
+  if (Math.abs(s[0] - s[2]) < e && Math.abs(s[0] - W) < e) return 'R';
+  if (Math.abs(s[1] - s[3]) < e && Math.abs(s[1]) < e) return 'D';
+  if (Math.abs(s[1] - s[3]) < e && Math.abs(s[1] - Lh) < e) return 'U';
+  return null;
+}
+/** Крайки деталі: by — Map(індекс елемента контуру → {mat, t, kind}), sides — {L,R,D,U: товщина|0}, kinds — види крайки з кольорами. */
+export function edgesOf(panel) {
+  const by = new Map();
+  for (const [i, mat, t] of panel.b || []) if (t > 0 || mat) by.set(i, { mat: mat || '', t: +t || 0 });
+  const kinds = [];
+  for (const e of by.values()) {
+    let k = kinds.find((x) => x.mat === e.mat && x.t === e.t);
+    if (!k) kinds.push(k = { mat: e.mat, t: e.t, color: EDGE_COLORS[kinds.length % EDGE_COLORS.length] });
+    e.kind = k;
+  }
+  const sides = { L: 0, R: 0, D: 0, U: 0 };
+  for (const sg of panel.c || []) {
+    const e = sg.length > 4 && by.get(sg[4]);
+    const sd = e && sideOf(sg, panel.w, panel.l);
+    if (sd) sides[sd] = Math.max(sides[sd], e.t);
+  }
+  return { by, sides, kinds };
+}
+/** Пази й вирізи: смуга вздовж траєкторії (переріз — зсув від траєкторії ліворуч за ходом), ширина, глибина, пласть. */
+export function cutsOf(panel) {
+  const T = panel.t;
+  return (panel.cut || []).map((c) => {
+    const pr = c.pr || [];
+    const xs = pr.flatMap((q) => [q[0], q[2]]), ys = pr.flatMap((q) => [q[1], q[3]]);
+    if (!xs.length) return null;
+    const a = Math.min(...xs), b = Math.max(...xs), z0 = Math.min(...ys), z1 = Math.max(...ys);
+    const side = z0 <= 0.05 && z1 >= T - 0.05 ? 'th' : z1 >= T - 0.05 ? 'B' : z0 <= 0.05 ? 'A' : 'in';
+    const bands = (c.tr || []).map(([x1, y1, x2, y2]) => {
+      const L = Math.hypot(x2 - x1, y2 - y1) || 1, nx = -(y2 - y1) / L, ny = (x2 - x1) / L;
+      return [[x1 + nx * a, y1 + ny * a], [x2 + nx * a, y2 + ny * a], [x2 + nx * b, y2 + ny * b], [x1 + nx * b, y1 + ny * b]];
+    });
+    const inside = bands.flat().some(([x, y]) => x > -0.5 && x < panel.w + 0.5 && y > -0.5 && y < panel.l + 0.5);
+    return { name: (c.n || 'Паз').trim(), width: b - a, depth: z1 - z0, side, bands, pr, z0, z1, a, b, inside };
+  }).filter(Boolean);
+}
+const CUT_SIDE = { A: 'пласть А', B: 'пласть Б', th: 'наскрізь', in: 'всередині' };
+
 const NS = 'http://www.w3.org/2000/svg';
 function el(tag, attrs, text) {
   const e = document.createElementNS(NS, tag);
@@ -125,8 +173,16 @@ function drawing(panel, groups, isOn, mode) {
   const shown = groups.filter(isOn);
   const holes = shown.flatMap((g) => g.items.map((h) => ({ ...h, color: g.color })));
   const uniq = (a) => [...new Set(a.map(fmt))].map(Number).sort((p, q) => p - q);
-  const xs = uniq(holes.filter((h) => !isSideEdge(h)).map((h) => h.x));
-  const ys = uniq(holes.filter((h) => !isEndEdge(h)).map((h) => h.y));
+  // Пази, паралельні сторонам: край пазу ближчий до бази — у розмірні лінії
+  const cutX = [], cutY = [];
+  for (const c of cutsOf(panel)) for (const bd of c.bands) {
+    const bx = bd.map((q) => q[0]), by = bd.map((q) => q[1]);
+    const inX = Math.max(...bx) - Math.min(...bx), inY = Math.max(...by) - Math.min(...by);
+    if (inX <= c.width + 0.1 && inY > inX) { const v = Math.min(...bx); if (v > 0.05 && v < W - 0.05) cutX.push(v); }
+    else if (inY <= c.width + 0.1 && inX > inY) { const v = Math.min(...by); if (v > 0.05 && v < Lh - 0.05) cutY.push(v); }
+  }
+  const xs = uniq([...holes.filter((h) => !isSideEdge(h)).map((h) => h.x), ...cutX]);
+  const ys = uniq([...holes.filter((h) => !isEndEdge(h)).map((h) => h.y), ...cutY]);
   // Поля під розміри: зверху X, зліва Y; у режимі «від бази» цифри повернуті, тож потрібно більше місця
   const txt = (v) => fmt(v).length * fs * 0.62;
   const dimX = -fs * 1.2; // розмірна лінія X (над деталлю)
@@ -160,6 +216,44 @@ function drawing(panel, groups, isOn, mode) {
   // Контур
   const d = (panel.c || []).map((s) => `M${s[0]},${Y(s[1])}L${s[2]},${Y(s[3])}`).join('');
   g.append(el('path', { d, fill: '#f6f2e9', stroke: '#2b2b2b', 'stroke-width': fs * 0.1, 'stroke-linejoin': 'round' }));
+
+  // Пази й вирізи: смуги (пласть Б — пунктиром); поза деталлю — червоним
+  for (const c of cutsOf(panel)) {
+    for (const bd of c.bands) {
+      g.append(el('path', {
+        d: 'M' + bd.map(([x, y]) => `${x},${Y(y)}`).join('L') + 'Z',
+        fill: c.inside ? '#8a6d3b' : '#d63333', 'fill-opacity': c.side === 'B' ? 0.15 : 0.35,
+        stroke: c.inside ? '#6b4f24' : '#d63333', 'stroke-width': fs * 0.06,
+        'stroke-dasharray': c.side === 'B' ? `${fs * 0.3} ${fs * 0.2}` : 'none',
+      }));
+    }
+  }
+  // Крайка: смуга вздовж кромки всередині контуру, колір — вид крайки
+  const ed = edgesOf(panel);
+  for (const sg of panel.c || []) {
+    const e = sg.length > 4 && ed.by.get(sg[4]);
+    if (!e) continue;
+    const L = Math.hypot(sg[2] - sg[0], sg[3] - sg[1]) || 1;
+    let nx = -(sg[3] - sg[1]) / L, ny = (sg[2] - sg[0]) / L;
+    const mx = (sg[0] + sg[2]) / 2, my = (sg[1] + sg[3]) / 2;
+    if ((W / 2 - mx) * nx + (Lh / 2 - my) * ny < 0) { nx = -nx; ny = -ny; } // всередину деталі
+    const o = fs * 0.22;
+    g.append(el('line', { x1: sg[0] + nx * o, y1: Y(sg[1] + ny * o), x2: sg[2] + nx * o, y2: Y(sg[3] + ny * o), stroke: e.kind.color, 'stroke-width': fs * 0.28 }));
+  }
+  // Напрям текстури (1 — уздовж X, 2 — уздовж Y)
+  if (panel.tex === 1 || panel.tex === 2) {
+    const cx = W / 2, cy = Lh / 2, len = Math.min(W, Lh) * 0.18, hw = fs * 0.35;
+    const [dx, dy] = panel.tex === 1 ? [len, 0] : [0, len];
+    const aw = { stroke: '#6b4f24', 'stroke-width': fs * 0.1, fill: 'none', opacity: 0.8 };
+    g.append(el('line', { x1: cx - dx, y1: Y(cy - dy), x2: cx + dx, y2: Y(cy + dy), ...aw }));
+    for (const k of [1, -1]) {
+      const tx = cx + k * dx, ty = cy + k * dy;
+      const d2 = panel.tex === 1
+        ? `M${tx - k * hw * 1.6},${Y(ty + hw)}L${tx},${Y(ty)}L${tx - k * hw * 1.6},${Y(ty - hw)}`
+        : `M${tx - hw},${Y(ty - k * hw * 1.6)}L${tx},${Y(ty)}L${tx + hw},${Y(ty - k * hw * 1.6)}`;
+      g.append(el('path', { d: d2, ...aw }));
+    }
+  }
 
   // Виносні лінії від кожного отвору до розмірних ліній (пунктир кольору групи)
   for (const h of holes) {
@@ -472,6 +566,73 @@ const tool = (label, title, fn) => {
   return b;
 };
 
+/** Під кресленням: крайки (колір → матеріал, товщина), текстура, пази з перерізами. */
+function prodInfo(panel) {
+  const box = document.createElement('div');
+  box.className = 'prod-info';
+  const ed = edgesOf(panel);
+  const s = ed.sides;
+  if (ed.kinds.length) {
+    const t = document.createElement('div');
+    t.className = 'prod-sec-title';
+    t.textContent = `Крайка · по довжині ${s.L || '—'} / ${s.R || '—'}, по ширині ${s.D || '—'} / ${s.U || '—'}`;
+    box.append(t);
+    for (const k of ed.kinds) {
+      const r = document.createElement('div');
+      r.className = 'prod-edge';
+      r.innerHTML = '<span class="sw"></span><b></b><span class="nm"></span>';
+      r.querySelector('.sw').style.background = k.color;
+      r.querySelector('b').textContent = fmt(k.t) + ' мм';
+      r.querySelector('.nm').textContent = k.mat;
+      box.append(r);
+    }
+  }
+  if (panel.tex === 1 || panel.tex === 2) {
+    const t = document.createElement('div');
+    t.className = 'prod-edge';
+    t.textContent = `Текстура: ${panel.tex === 1 ? 'уздовж ширини ↔' : 'уздовж довжини ↕'}`;
+    box.append(t);
+  }
+  const cuts = cutsOf(panel);
+  if (cuts.length) {
+    const t = document.createElement('div');
+    t.className = 'prod-sec-title';
+    t.textContent = 'Пази й вирізи — переріз';
+    const row = document.createElement('div');
+    row.className = 'prod-cuts';
+    const seen = new Set();
+    for (const c of cuts) {
+      const key = c.name + '|' + c.pr.map((q) => q.join(',')).join(';');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      row.append(sectionCard(c, panel.t));
+    }
+    box.append(t, row);
+  }
+  return box;
+}
+/** Картка перерізу: шматок плити товщиною T, у ньому профіль пазу, ширина й глибина. */
+function sectionCard(c, T) {
+  const card = document.createElement('div');
+  card.className = 'prod-cut' + (c.inside ? '' : ' warn');
+  const pad = Math.max(c.width, 6) * 1.2;
+  const x0 = c.a - pad, x1 = c.b + pad, fs = Math.max(T, x1 - x0) / 8;
+  const svg = el('svg', { viewBox: `${x0 - fs * 0.5} ${-fs * 1.8} ${x1 - x0 + fs * 3} ${T + fs * 3.6}`, class: 'prod-cut-svg' });
+  const Z = (z) => T - z; // пласть А знизу
+  svg.append(el('rect', { x: x0, y: 0, width: x1 - x0, height: T, fill: '#efe6d6', stroke: '#2b2b2b', 'stroke-width': fs * 0.08 }));
+  const poly = 'M' + c.pr.map((q) => `${q[0]},${Z(q[1])}`).join('L') + 'Z';
+  svg.append(el('path', { d: poly, fill: '#fff', stroke: '#d63333', 'stroke-width': fs * 0.1, 'stroke-linejoin': 'round' }));
+  const txt = (x, y, t, anchor = 'middle') => svg.append(el('text', { x, y, 'font-size': fs, 'text-anchor': anchor, 'font-family': 'Manrope, system-ui, sans-serif', 'font-weight': 700, fill: '#222' }, t));
+  txt((c.a + c.b) / 2, -fs * 0.5, fmt(c.width));
+  txt(x1 + fs * 0.2, Z((c.z0 + c.z1) / 2) + fs * 0.35, fmt(c.depth), 'start');
+  txt(x0, T + fs * 1.3, 'пласть А', 'start');
+  const cap = document.createElement('div');
+  cap.className = 'prod-cut-cap';
+  cap.textContent = `${c.name} · ${fmt(c.width)}×${fmt(c.depth)} · ${CUT_SIDE[c.side]}${c.inside ? '' : ' · ⚠ поза деталлю, перевірте в БАЗИСі'}`;
+  card.append(svg, cap);
+  return card;
+}
+
 /** Вікно «Присадка» для деталі. */
 export function showDrill(panel) {
   const groups = groupsOf(panel);
@@ -585,7 +746,7 @@ export function showDrill(panel) {
     if (!groups.length) list.textContent = 'Отворів у цій деталі немає.';
   };
 
-  wrap.append(head, cats, bar, pic, pick, legend, list);
+  wrap.append(head, cats, bar, pic, pick, legend, prodInfo(panel), list);
   openSheet(`Присадка · ${panel.name || 'деталь'}`, wrap);
   renderCats();
   renderView();

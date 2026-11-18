@@ -11,6 +11,7 @@ import { createDims, boxDims, overallDims } from './dims.js';
 import { MANAGER_TELEGRAM } from './contact.js';
 import { notify } from './notify.js';
 import { loadDrill, matchPanel, showDrill } from './drill.js';
+import { showProduction } from './production.js';
 import { fetchFile } from './files.js';
 
 // Готові варіанти кольору фасадів (перший пункт — колір/текстура з самого проєкту)
@@ -738,7 +739,8 @@ async function main() {
   // ---- Меню в шапці ----
   const menuBtn = $('menu');
   menuBtn.hidden = false;
-  createMenu(menuBtn, [
+  // «Виробництво» — лише коли є присадка (менеджер); меню збирається при кожному відкритті
+  const menuItems = () => [
     { label: 'В центр', icon: '⌖', onClick: () => viewer.resetView() },
     isGlbModel && {
       label: 'Список деталей',
@@ -749,6 +751,7 @@ async function main() {
         viewer.focusBox(model.boxOf(selectedParts()));
       }),
     },
+    drillPanels && { label: 'Виробництво', icon: '🛠', onClick: () => showProduction(drillPanels) },
     isGlbModel && { label: 'Розібрати / зібрати', icon: '⤧', onClick: () => doExplode(!explodeOn) },
     {
       label: 'Лінійка (замір)',
@@ -757,7 +760,8 @@ async function main() {
     },
     isGlbModel && { label: 'Показати все', icon: '👁', onClick: () => showAll() },
     { label: 'Інструкція', icon: '?', onClick: () => showHelp() },
-  ]);
+  ];
+  createMenu(menuBtn, menuItems);
   const isVisiblePart = (part) => part.meshes ? part.meshes.some((r) => r.mesh.visible) : true;
 
   window.addEventListener('resize', () => viewer.resize());
