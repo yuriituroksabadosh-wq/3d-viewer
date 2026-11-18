@@ -95,6 +95,76 @@ function camFor(box, dir, w, h, ortho) {
   return cam;
 }
 
+/**
+ * Точки для номерів позицій: рендер у текстуру, де кожна деталь — свій колір (фурнітура — чорна, закриває деталі),
+ * далі карта відстаней до межі; для кожної деталі — найглибша видима точка і запас r (півширина місця під номер).
+ */
+function idMarks(r, scene, cam, vw, vh, recs, posOf) {
+  const list = [];
+  const swapped = [];
+  const ids = new Map();
+  for (const [m, p] of recs) {
+    if (!m.visible) continue;
+    let id = 0;
+    if (ids.has(p)) id = ids.get(p);
+    else {
+      const pos = posOf(p);
+      if (pos) { list.push({ p, pos }); id = list.length; }
+      ids.set(p, id);
+    }
+    const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB((id & 255) / 255, ((id >> 8) & 255) / 255, 0), toneMapped: false, side: THREE.DoubleSide });
+    swapped.push([m, m.material]);
+    m.material = mat;
+    for (const ch of m.children) if (ch.isLineSegments && ch.visible) { ch.visible = false; swapped.push([ch, null]); }
+  }
+  const rt = new THREE.WebGLRenderTarget(vw, vh);
+  const buf = new Uint8Array(vw * vh * 4);
+  try {
+    r.setRenderTarget(rt);
+    r.render(scene, cam);
+    r.readRenderTargetPixels(rt, 0, 0, vw, vh, buf);
+  } finally {
+    r.setRenderTarget(null);
+    rt.dispose();
+    for (const [o, mat] of swapped) {
+      if (mat) { o.material.dispose(); o.material = mat; } else o.visible = true;
+    }
+  }
+  // id кожного пікселя (рядки знизу вгору → згори вниз); фон (синій канал) = -1
+  const N = vw * vh, idx = new Int32Array(N);
+  for (let y = 0; y < vh; y++) for (let x = 0; x < vw; x++) {
+    const s = ((vh - 1 - y) * vw + x) * 4;
+    idx[y * vw + x] = buf[s + 2] > 128 ? -1 : buf[s] + buf[s + 1] * 256;
+  }
+  // Карта відстаней до межі деталі (фаска 1 / 1.41, два проходи)
+  const d = new Float32Array(N);
+  for (let y = 0; y < vh; y++) for (let x = 0; x < vw; x++) {
+    const i = y * vw + x, v = idx[i];
+    const edge = x === 0 || y === 0 || x === vw - 1 || y === vh - 1 || idx[i - 1] !== v || idx[i + 1] !== v || idx[i - vw] !== v || idx[i + vw] !== v;
+    d[i] = edge ? 0 : 1e9;
+  }
+  for (let y = 1; y < vh; y++) for (let x = 1; x < vw - 1; x++) {
+    const i = y * vw + x;
+    if (!d[i]) continue;
+    d[i] = Math.min(d[i], d[i - 1] + 1, d[i - vw] + 1, d[i - vw - 1] + 1.41, d[i - vw + 1] + 1.41);
+  }
+  for (let y = vh - 2; y >= 0; y--) for (let x = vw - 2; x > 0; x--) {
+    const i = y * vw + x;
+    if (!d[i]) continue;
+    d[i] = Math.min(d[i], d[i + 1] + 1, d[i + vw] + 1, d[i + vw + 1] + 1.41, d[i + vw - 1] + 1.41);
+  }
+  const best = new Map();
+  for (let i = 0; i < N; i++) {
+    const v = idx[i];
+    if (v <= 0) continue;
+    const b = best.get(v);
+    if (!b || d[i] > b.r) best.set(v, { r: d[i], i });
+  }
+  const out = [];
+  for (const [v, b] of best) out.push({ pos: list[v - 1].pos, x: b.i % vw, y: Math.floor(b.i / vw), r: b.r });
+  return out;
+}
+
 /** Чотири види блоку: canvas-и + точки позицій деталей на відкритому виді. */
 function renderViews(viewer, model, panels, name, sz) {
   const parts = blockParts(model, name);
@@ -147,17 +217,13 @@ function renderViews(viewer, model, panels, name, sz) {
     const [vw, vh] = sz.open;
     const camOpen = camFor(box, iso, vw, vh, false);
     out.open = shot(camOpen, vw, vh);
-    // Позиції деталей (ArtPos з БАЗИСу) — точки на відкритому виді
-    out.marks = [];
-    const seen = new Set();
-    for (const p of parts) {
-      if (!p.board || p.key === 'facade' || doorParts.has(p)) continue;
+    // Позиції деталей (ArtPos з БАЗИСу): ID-рендер — кожна деталь своїм кольором, номер ставимо
+    // в найглибшу ВИДИМУ точку деталі (максимум відстані до її межі на картинці). Невидимі — без номера на виді.
+    out.marks = idMarks(r, scene, camOpen, vw, vh, recs, (p) => {
+      if (!p.board || p.key === 'facade' || doorParts.has(p)) return null;
       const dp = matchPanel(panels, p.box);
-      if (!dp || !dp.art || seen.has(dp.art + '|' + p.box.min.toArray().join())) continue;
-      seen.add(dp.art + '|' + p.box.min.toArray().join());
-      const v = p.box.getCenter(new THREE.Vector3()).project(camOpen);
-      out.marks.push({ pos: String(dp.art), x: (v.x + 1) / 2 * vw, y: (1 - v.y) / 2 * vh });
-    }
+      return dp && dp.art ? String(dp.art) : null;
+    });
 
     model.setViewMode('xray');
     show(() => true);
@@ -277,6 +343,31 @@ function viewBox(ctx, img, x, y, w, h, title, marks) {
   const ix = x + (w - iw) / 2, iy = y + top + (h - top - pad - ih) / 2;
   ctx.drawImage(img, ix, iy, iw, ih);
   if (!marks || !marks.length) return;
+  // Номер прямо на деталі, якщо місця вистачає; дрібні деталі — виноскою до краю рамки
+  const R = 13;
+  const onPart = marks.filter((m) => m.r == null || m.r * s >= R * 0.75);
+  const badges = () => {
+    for (const m of onPart) {
+      const rr = Math.min(R, m.r == null ? R : m.r * s);
+      const bx = ix + m.x * s, by = iy + m.y * s;
+      ctx.beginPath();
+      ctx.arc(bx, by, rr, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = '#1d1d1f';
+      ctx.stroke();
+      ctx.fillStyle = '#1d1d1f';
+      ctx.font = `800 ${Math.round(rr * (String(m.pos).length > 2 ? 0.8 : 1.05))}px ${FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(m.pos, bx, by + 0.5);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+    }
+  };
+  marks = marks.filter((m) => !onPart.includes(m));
+  if (!marks.length) { badges(); return; }
   // Групи однакових позицій
   const groups = new Map();
   for (const m of marks) {
@@ -334,6 +425,7 @@ function viewBox(ctx, img, x, y, w, h, title, marks) {
   for (const m of L.top) { const ly = y + top - 14; draw(m, m.at, ly, m.at, ly + 6); }
   for (const m of L.bottom) { const ly = y + h - 6; draw(m, m.at, ly, m.at, ly - 18); }
   ctx.textAlign = 'left';
+  badges();
 }
 
 const STAMP_H = 100;
