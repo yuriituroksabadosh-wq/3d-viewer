@@ -12,6 +12,7 @@ import { MANAGER_TELEGRAM } from './contact.js';
 import { notify } from './notify.js';
 import { loadDrill, matchPanel, showDrill } from './drill.js';
 import { showProduction } from './production.js';
+import { createDrillHoles } from './drill-holes.js';
 import { fetchFile } from './files.js';
 
 // Готові варіанти кольору фасадів (перший пункт — колір/текстура з самого проєкту)
@@ -212,6 +213,8 @@ async function main() {
   let current = null; // вибрана деталь (для блоку — будь-яка деталь блоку)
   // Присадка: лише менеджеру (ключ від воркера за підписом Telegram); у клієнта — null, кнопки немає
   let drillPanels = null;
+  let drillHoles = null;
+  let focusOn = false;
   if (isGlbModel && !SHOT) {
     // Лише локальна перевірка (у зібраний сайт не потрапляє): ?drilltest — тестова присадка з sessionStorage
     const devDrill = import.meta.env.DEV && new URLSearchParams(location.search).has('drilltest')
@@ -219,6 +222,8 @@ async function main() {
       : null;
     (devDrill || loadDrill(name, tg)).then((p) => {
       drillPanels = p;
+      // Отвори присадки в 3D — у рентгені та при вибраній деталі (менеджеру)
+      if (p) drillHoles = createDrillHoles(model, p);
       if (p) refreshInfo();
     });
   }
@@ -260,6 +265,7 @@ async function main() {
     if (isGlbModel) {
       model.select(selectedParts());
       model.setFocus(part ? selectedParts() : null);
+      focusOn = !!part;
     } else model.highlight(part);
     refreshInfo();
     refreshTools();
@@ -776,6 +782,7 @@ async function main() {
     last = now;
     viewer.tick(dt);
     model.update(dt);
+    if (drillHoles) drillHoles.update(model.viewMode === 'xray' || focusOn);
     viewer.controls.update();
     viewer.renderer.render(viewer.scene, viewer.camera);
     cube.render();
