@@ -130,7 +130,7 @@ try {
 } catch (e) {
   log('Сховище воркера недоступне (' + (e.message || e) + ') — викладаю файли в git, як раніше');
 }
-const files = [...(stored ? [] : blobs.map((b) => `data/${b}`)), 'data/expiry.json'].filter((f) => fs.existsSync(path.join(ROOT, f)));
+const files = [...(stored ? [] : blobs.map((b) => `data/${b}`)), 'data/expiry.json', 'data/hw'].filter((f) => fs.existsSync(path.join(ROOT, f)));
 git(['add', '-f', ...files]); // -f: data/*.glb тощо в .gitignore (запасний шлях без воркера)
 const staged = git(['diff', '--cached', '--name-only']).trim();
 if (staged) {

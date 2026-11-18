@@ -3,6 +3,7 @@
 
 import { openSheet } from './extras.js';
 import { edgesOf, cutsOf, showDrill } from './drill.js';
+import { makeBlockPdf, sheetBlocks } from './block-sheet.js';
 
 const fmt = (n) => (Math.round(n * 10) / 10).toString();
 
@@ -37,7 +38,7 @@ const cutText = (p) => {
 };
 
 /** panels — дані присадки моделі. */
-export function showProduction(panels) {
+export function showProduction(panels, ctx) {
   // Без кімнати: стіни, підлога (товсті «плити»)
   const list = panels.filter((p) => p.t > 0 && p.t <= 60);
   const blocks = new Map();
@@ -93,6 +94,7 @@ export function showProduction(panels) {
     bar.replaceChildren(
       seg([[false, 'Готовий розмір'], [true, 'Розкрій']], cutMode, (v) => { cutMode = v; render(); }),
       btn('Друк', () => printAll()),
+      ...(ctx ? [btn('Аркуші блоків PDF', (e) => pdf(sheetBlocks(ctx.model, panels), e.currentTarget))] : []),
     );
     body.replaceChildren(...names.flatMap((b) => {
       const ps = blocks.get(b);
@@ -103,7 +105,9 @@ export function showProduction(panels) {
       head.querySelector('.parts-gname').textContent = b;
       head.querySelector('.parts-count').textContent = ps.length;
       head.addEventListener('click', () => { if (open.has(b)) open.delete(b); else open.add(b); render(); });
-      return open.has(b) ? [head, table(ps)] : [head];
+      if (!open.has(b)) return [head];
+      const can = ctx && sheetBlocks(ctx.model, panels).includes(b);
+      return can ? [head, btn('PDF блоку', (e) => pdf([b], e.currentTarget)), table(ps)] : [head, table(ps)];
     }));
   };
 
@@ -125,6 +129,27 @@ export function showProduction(panels) {
     window.addEventListener('afterprint', done);
     window.print();
 
+  };
+
+  // PDF аркушів: штамп, 4 види, матеріали, фурнітура
+  let busy = false;
+  const pdf = async (names, b) => {
+    if (busy || !names.length) return;
+    busy = true;
+    const label = b.textContent;
+    try {
+      const blob = await makeBlockPdf({ ...ctx, panels, names, onStep: (i, n) => { b.textContent = `Аркуш ${i + 1} з ${n}…`; } });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `Аркуші — ${names.length === 1 ? names[0] : (panels.info?.name || 'виріб')}.pdf`;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    } catch (err) {
+      console.error('Аркуші:', err);
+      alert('Не вдалося зробити PDF: ' + (err.message || err));
+    } finally { busy = false; b.textContent = label; }
   };
 
   const hint = document.createElement('div');

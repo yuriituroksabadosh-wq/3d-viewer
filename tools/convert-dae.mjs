@@ -17,6 +17,7 @@ import { dedup, instance, prune, weld, textureCompress, meshopt, getBounds } fro
 import { MeshoptEncoder, MeshoptDecoder } from 'meshoptimizer';
 import sharp from 'sharp';
 import { daeToDocument } from './dae-parse.mjs';
+import { fetchHwImages } from './hw-images.mjs';
 import { geomToDocument, textureMap } from './geom-build.mjs';
 
 const require = createRequire(import.meta.url);
@@ -210,6 +211,7 @@ if (fs.existsSync(infoPath)) {
   // Присадка — НЕ в модель (вона публічна), а окремим зашифрованим файлом лише для менеджера
   if (Array.isArray(meta.drill) && meta.drill.length) drillPanels = meta.drill;
   // У шапку аркуша — лише номер замовлення (префікс) і назва виробу, без імені замовника
+  if (Array.isArray(meta.spec) && meta.spec.length) await fetchHwImages(meta.spec);
   drillExtra = { spec: Array.isArray(meta.spec) ? meta.spec : [], info: { name: m3.name, prefix: m3.prefix } };
   console.log(`   кріплень з БАЗИСу: ${m3.fasteners.length}`);
   console.log(`   параметри виробу: «${m3.name}» ${m3.prefix}${withOrder ? ", замовлення: " + m3.order : " (замовлення не додано: --with-order)"}`);

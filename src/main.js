@@ -215,7 +215,7 @@ async function main() {
   if (isGlbModel && !SHOT) {
     // Лише локальна перевірка (у зібраний сайт не потрапляє): ?drilltest — тестова присадка з sessionStorage
     const devDrill = import.meta.env.DEV && new URLSearchParams(location.search).has('drilltest')
-      ? Promise.resolve((() => { try { return JSON.parse(sessionStorage.getItem('drilltest')).panels; } catch { return null; } })())
+      ? Promise.resolve((() => { try { const d = JSON.parse(sessionStorage.getItem('drilltest')); return Object.assign(d.panels, { spec: d.spec || [], info: d.info || {} }); } catch { return null; } })())
       : null;
     (devDrill || loadDrill(name, tg)).then((p) => {
       drillPanels = p;
@@ -751,7 +751,7 @@ async function main() {
         viewer.focusBox(model.boxOf(selectedParts()));
       }),
     },
-    drillPanels && { label: 'Виробництво', icon: '🛠', onClick: () => showProduction(drillPanels) },
+    drillPanels && { label: 'Виробництво', icon: '🛠', onClick: () => showProduction(drillPanels, { viewer, model }) },
     isGlbModel && { label: 'Розібрати / зібрати', icon: '⤧', onClick: () => doExplode(!explodeOn) },
     {
       label: 'Лінійка (замір)',
