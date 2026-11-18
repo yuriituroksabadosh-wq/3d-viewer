@@ -32,19 +32,36 @@ function subBlocksOf(panels, block) {
 const nameLines = (n) => String(n || '').split(/[\r\n]+/).map((s) => s.trim()).filter(Boolean);
 
 // ---------------- Дані блоку ----------------
-/** Матеріали блоку: однакові деталі — одним рядком, від товстих до тонких. */
+/** Крайка по сторонах: «Д 0.6/0.6 · Ш 0.6/—» (Д — по довжині, Ш — по ширині). */
+const edgeTxt = (p) => {
+  const s = edgesOf(p).sides;
+  const v = (x) => (x ? fmt(x) : '—');
+  return s.L || s.R || s.D || s.U ? `Д ${v(s.L)}/${v(s.R)} · Ш ${v(s.D)}/${v(s.U)}` : '';
+};
+/** Пази й вирізи з розмірами: «паз 5 / 10 · 7×10 пл. А». */
+const cutTxt = (p) => [...new Set(cutsOf(p).map((c) => `${c.name} · ${fmt(c.width)}×${fmt(c.depth)} ${c.side === 'A' ? 'пл. А' : c.side === 'B' ? 'пл. Б' : 'наскрізь'}${c.inside ? '' : ' ⚠'}`))].join(', ');
+
+/** Матеріали блоку: однакові деталі — одним рядком, від товстих до тонких; матеріал — заголовком групи. */
 function materialRows(panels, block) {
   const m = new Map();
   for (const p of panels) {
     if (!inBlock(pathOf(p), block) || !(p.t > 0 && p.t <= 60)) continue;
-    const k = [p.mat, p.name, fmt(p.l), fmt(p.w), fmt(p.t)].join('|');
-    if (!m.has(k)) m.set(k, { pos: [], mat: p.mat || '', name: p.name || '', n: 0, t: p.t, l: p.l, w: p.w });
+    const edge = edgeTxt(p);
+    const k = [p.mat, p.name, fmt(p.l), fmt(p.w), fmt(p.t), edge].join('|');
+    if (!m.has(k)) m.set(k, { pos: [], mat: p.mat || '', name: p.name || '', n: 0, t: p.t, l: p.l, w: p.w, edge });
     const r = m.get(k);
     r.n++;
     if (p.art && !r.pos.includes(p.art)) r.pos.push(p.art);
   }
   const num = (r) => parseFloat(r.pos[0]) || 1e9;
-  return [...m.values()].sort((a, b) => b.t - a.t || a.mat.localeCompare(b.mat, 'uk') || num(a) - num(b));
+  const sorted = [...m.values()].sort((a, b) => b.t - a.t || a.mat.localeCompare(b.mat, 'uk') || num(a) - num(b));
+  const out = [];
+  let cur = null;
+  for (const r of sorted) {
+    if (r.mat !== cur) { cur = r.mat; out.push({ section: r.mat || 'Без матеріалу' }); }
+    out.push(r);
+  }
+  return out;
 }
 /** Фурнітура блоку: назва без рядка артикула, артикул(и), кількість. Службові об'єкти («6», «2x2») — геть. */
 function hardwareRows(spec, block) {
@@ -218,6 +235,69 @@ function idMarks(r, scene, cam, vw, vh, recs, posOf, merge = false) {
   return out;
 }
 
+/** Обрізати білі поля навколо зображення (з запасом 14 px); точки позицій зсуваються разом із ним. */
+function cropContent(img, marks) {
+  const w = img.width, h = img.height;
+  const px = img.getContext('2d').getImageData(0, 0, w, h).data;
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
+    const k = (y * w + x) * 4;
+    if (px[k] < 246 || px[k + 1] < 246 || px[k + 2] < 246) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  }
+  if (x1 < x0 || y1 < y0) return [img, marks];
+  const pad = 14;
+  x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad); x1 = Math.min(w, x1 + pad); y1 = Math.min(h, y1 + pad);
+  const c = document.createElement('canvas');
+  c.width = x1 - x0; c.height = y1 - y0;
+  c.getContext('2d').drawImage(img, -x0, -y0);
+  return [c, (marks || []).map((m) => ({ ...m, x: m.x - x0, y: m.y - y0 }))];
+}
+
+/** Мініатюри фурнітури з 3D-моделі (для тих, у кого немає фото з Віяра): кожна деталь окремо, на білому. */
+function renderThumbs(viewer, model, list, size = 200) {
+  const out = new Map();
+  if (!list.length) return out;
+  const recs = model.parts.flatMap((p) => p.meshes.map((rr) => [rr.mesh, p]));
+  const savedVis = recs.map(([m]) => m.visible);
+  const scene = viewer.scene;
+  const savedBg = scene.background;
+  const floor = scene.children.find((o) => o.isMesh && o.geometry?.type === 'PlaneGeometry');
+  const savedFloor = floor?.visible;
+  const savedMode = model.viewMode;
+  const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  r.setPixelRatio(1);
+  r.toneMapping = viewer.renderer.toneMapping;
+  r.toneMappingExposure = viewer.renderer.toneMappingExposure;
+  r.outputColorSpace = viewer.renderer.outputColorSpace;
+  try {
+    model.setFocus(null);
+    model.select([]);
+    model.setViewMode('real');
+    scene.background = new THREE.Color('#ffffff');
+    if (floor) floor.visible = false;
+    const dir = new THREE.Vector3(0.6, 0.45, 1).normalize();
+    for (const { key, part } of list) {
+      for (const [m, p] of recs) m.visible = p === part;
+      const b = new THREE.Box3();
+      for (const rec of part.meshes) { rec.mesh.updateWorldMatrix(true, false); b.expandByObject(rec.mesh); }
+      if (b.isEmpty()) continue;
+      r.setSize(size, size, false);
+      r.render(scene, camFor(b, dir, size, size, false));
+      const c = document.createElement('canvas');
+      c.width = size; c.height = size;
+      c.getContext('2d').drawImage(r.domElement, 0, 0);
+      out.set(key, cropContent(c, [])[0]);
+    }
+  } finally {
+    r.dispose();
+    model.setViewMode(savedMode);
+    recs.forEach(([m], i) => { m.visible = savedVis[i]; });
+    scene.background = savedBg;
+    if (floor) floor.visible = savedFloor;
+  }
+  return out;
+}
+
 /** Чотири види блоку: canvas-и + точки позицій деталей на відкритому виді. */
 function renderViews(viewer, model, panels, name, sz) {
   const parts = blockParts(model, name, panels);
@@ -282,6 +362,8 @@ function renderViews(viewer, model, panels, name, sz) {
       const dp = matchPanel(panels, p.box);
       return dp && dp.art ? String(dp.art) : null;
     });
+    [out.open, out.marks] = cropContent(out.open, out.marks);
+    [out.closed] = cropContent(out.closed, []);
 
     model.setViewMode('xray');
     show(() => true);
@@ -342,6 +424,7 @@ function renderViews(viewer, model, panels, name, sz) {
           const dp = matchPanel(panels, p.box);
           return dp && dp.art ? String(dp.art) : null;
         });
+        [out.exploded, out.explodedMarks] = cropContent(out.exploded, out.explodedMarks);
       } finally {
         for (const [m, pos] of moved) { m.position.copy(pos); m.updateMatrixWorld(true); }
       }
@@ -393,6 +476,18 @@ function table(ctx, x, y, w, maxY, title, cols, rows, start, rowH, cell, f = 15)
   let i = start;
   for (; i < rows.length; i++) {
     if (y + rowH > maxY) break;
+    if (rows[i].section) {
+      // Заголовок групи (матеріал) — на всю ширину
+      ctx.fillStyle = '#f6f1e8';
+      ctx.fillRect(x, y, w, rowH);
+      ctx.strokeStyle = LINE;
+      ctx.strokeRect(x, y, w, rowH);
+      ctx.fillStyle = INK;
+      ctx.font = `700 ${f}px ${FONT}`;
+      ctx.fillText(fit(ctx, rows[i].section, w - 12), x + 6, y + rowH / 2 + f * 0.36);
+      y += rowH;
+      continue;
+    }
     ctx.strokeStyle = LINE;
     ctx.strokeRect(x, y, w, rowH);
     cols.forEach((c, k) => { if (k) { ctx.beginPath(); ctx.moveTo(xs[k], y); ctx.lineTo(xs[k], y + rowH); ctx.stroke(); } });
@@ -477,7 +572,7 @@ function drawDims(ctx, d, ix, iy, s) {
   // Вертикальний ланцюжок: pts — екранні y, vals — мм
   const vChain = (lx, pts, vals, bold) => {
     line(lx, Math.min(...pts), lx, Math.max(...pts));
-    ctx.font = `${bold ? 800 : 600} ${bold ? 13 : 11}px ${FONT}`;
+    ctx.font = `${bold ? 800 : 600} ${bold ? 16 : 13}px ${FONT}`;
     for (let i = 0; i < pts.length; i++) {
       tick(lx, pts[i]);
       ctx.save(); ctx.strokeStyle = '#9a948a'; line(xEdge - 2, pts[i], lx - 3, pts[i]); ctx.restore();
@@ -491,7 +586,7 @@ function drawDims(ctx, d, ix, iy, s) {
   };
   const hChain = (ly, pts, vals, bold) => {
     line(Math.min(...pts), ly, Math.max(...pts), ly);
-    ctx.font = `${bold ? 800 : 600} ${bold ? 13 : 11}px ${FONT}`;
+    ctx.font = `${bold ? 800 : 600} ${bold ? 16 : 13}px ${FONT}`;
     for (let i = 0; i < pts.length; i++) {
       tick(pts[i], ly);
       ctx.save(); ctx.strokeStyle = '#9a948a'; line(pts[i], yEdge + 2, pts[i], ly + 3); ctx.restore();
@@ -641,7 +736,7 @@ function titlePage(viewer, model, names, info, panels) {
   r.toneMapping = viewer.renderer.toneMapping;
   r.toneMappingExposure = viewer.renderer.toneMappingExposure;
   r.outputColorSpace = viewer.renderer.outputColorSpace;
-  let img, marks, frameBox = [0, 0, RW, RH];
+  let img, marks, frameBox = [0, 0, RW, RH], dimsTxt = '';
   try {
     model.setFocus(null);
     model.select([]);
@@ -653,6 +748,7 @@ function titlePage(viewer, model, names, info, panels) {
     // Разом із приміщенням (стіни, підлога); кадр — за меблями, стіни довкола обрізаються
     for (const [m] of recs) m.visible = true;
     const box = model.boxOf(model.parts.filter((p) => p.key !== 'room'));
+    { const gs = box.getSize(new THREE.Vector3()); dimsTxt = `${Math.round(gs.x)} × ${Math.round(gs.y)} × ${Math.round(gs.z)} мм`; }
     const dir = new THREE.Vector3(...(model.bounds?.viewDir || [0.6, 0.35, 1])).normalize();
     const cam = camFor(box, dir, RW, RH, false);
     // Межі меблів на картинці — для обрізання
@@ -708,7 +804,7 @@ function titlePage(viewer, model, names, info, panels) {
   ctx.fillText([info.name, (info.prefix || '').trim()].filter(Boolean).join(' · ') || 'Виріб', M, M + 36);
   ctx.fillStyle = '#6f685c';
   ctx.font = `600 18px ${FONT}`;
-  ctx.fillText(`Блоків: ${names.length}`, M, M + 62);
+  ctx.fillText(`Блоків: ${names.length}${dimsTxt ? ' · габарит ' + dimsTxt : ''}`, M, M + 62);
   // Обрізати до меблів (+ запас, щоб було видно приміщення довкола)
   let [x0, y0, x1, y1] = frameBox;
   const padX = (x1 - x0) * 0.08, padY = (y1 - y0) * 0.08;
@@ -721,9 +817,9 @@ function titlePage(viewer, model, names, info, panels) {
   ctx.drawImage(img, x0, y0, cw, ch, ix + x0 * s, iy + y0 * s, cw * s, ch * s);
   // Назви блоків: табличка в найбільшій видимій частині блоку; якщо налазить на сусідню — зсуваємо нижче
   const placed = [];
-  ctx.font = `800 20px ${FONT}`;
+  ctx.font = `800 26px ${FONT}`;
   for (const m of marks.sort((a, b) => b.r - a.r)) {
-    const tw = ctx.measureText(m.pos).width, bw = tw + 22, bh = 34;
+    const tw = ctx.measureText(m.pos).width, bw = tw + 28, bh = 42;
     let bx = Math.max(M, Math.min(W - M - bw, ix + m.x * s - bw / 2)), by = iy + m.y * s - bh / 2;
     for (let k = 0; k < 12 && placed.some((q) => bx < q.x + q.w + 4 && bx + bw + 4 > q.x && by < q.y + q.h + 4 && by + bh + 4 > q.y); k++) by += bh + 6;
     placed.push({ x: bx, y: by, w: bw, h: bh });
@@ -735,7 +831,7 @@ function titlePage(viewer, model, names, info, panels) {
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = INK;
-    ctx.fillText(m.pos, bx + 11, by + 24);
+    ctx.fillText(m.pos, bx + 14, by + 30);
   }
   return c;
 }
@@ -789,8 +885,13 @@ function newPageFn(pages, W, H, M) {
 /** Клітинка фурнітури: фото (до двох), артикул, назва, кількість. */
 const hwCell = (ctx, assets, cols) => (r, xs, y, rh, f, right) => {
   const imgs = r.codes.map((c) => assets.hw.get(c)).filter(Boolean).slice(0, 2);
+  if (!imgs.length && assets.thumbs?.get(r.title)) imgs.push(assets.thumbs.get(r.title)); // з 3D-моделі
   const cw = xs[1] - xs[0] - 4;
-  imgs.forEach((im, k) => { const sz = Math.min(rh - 4, cw / imgs.length - 2); ctx.drawImage(im, xs[0] + 2 + k * (sz + 2), y + (rh - sz) / 2, sz, sz); });
+  imgs.forEach((im, k) => {
+    const sz = Math.min(rh - 4, cw / imgs.length - 2);
+    const s2 = Math.min(sz / im.width, sz / im.height), dw = im.width * s2, dh = im.height * s2;
+    ctx.drawImage(im, xs[0] + 2 + k * (sz + 2) + (sz - dw) / 2, y + (rh - dh) / 2, dw, dh);
+  });
   textCells(ctx, (q) => ['', ...cols.map((fn) => fn(q))], [cols.length])(r, xs, y, rh, f, right);
 };
 
@@ -805,21 +906,21 @@ function blockPages(views, block, mats, hws, assets) {
   viewBox(ctx, views.front, cells.front.x, cells.front.y, cells.front.w, cells.front.h, 'Спереду · рентген', null, views.frontDims);
   viewBox(ctx, views.side, cells.side.x, cells.side.y, cells.side.w, cells.side.h, 'Збоку · рентген', null, views.sideDims);
 
-  const matCols = [{ t: 'Поз.', w: 0.08 }, { t: 'Матеріал', w: 0.4 }, { t: 'Деталь', w: 0.22 }, { t: 'К-сть', w: 0.07 }, { t: 'Т', w: 0.06 }, { t: 'Довж.', w: 0.085 }, { t: 'Шир.', w: 0.085 }];
+  const matCols = [{ t: 'Поз.', w: 0.08 }, { t: 'Деталь', w: 0.3 }, { t: 'К-сть', w: 0.07 }, { t: 'Т', w: 0.06 }, { t: 'Довж.', w: 0.1 }, { t: 'Шир.', w: 0.1 }, { t: 'Крайка', w: 0.29 }];
   const hwCols = [{ t: '', w: 0.11 }, { t: 'Артикул', w: 0.2 }, { t: 'Найменування', w: 0.58 }, { t: 'К-сть', w: 0.11 }];
   const avail = stampTop - tablesY - 30 - 28;
   const rowOf = (n, lo, hi) => Math.max(lo, Math.min(hi, Math.floor(avail / Math.max(1, n))));
   const mh = rowOf(mats.length, 19, 28), hh = rowOf(hws.length, 22, 44);
-  const fm = Math.max(11, Math.min(15, Math.round(mh * 0.52))), fh = Math.max(11, Math.min(15, Math.round(hh * 0.4)));
+  const fm = Math.max(11, Math.min(16, Math.round(mh * 0.55))), fh = Math.max(11, Math.min(15, Math.round(hh * 0.4)));
   const lw = (vw - 14) * 0.56, rw = vw - 14 - lw;
-  const matText = textCells(ctx, (r) => [r.pos.join(', '), r.mat, r.name, r.n, fmt(r.t), fmt(r.l), fmt(r.w)], [0, 3]);
+  const matText = textCells(ctx, (r) => [r.pos.join(', '), r.name, r.n, fmt(r.t), fmt(r.l), fmt(r.w), r.edge], [0, 2]);
   let mi = table(ctx, M, tablesY, lw, stampTop, 'Матеріали', matCols, mats, 0, mh, matText, fm);
   let hi = table(ctx, M + lw + 14, tablesY, rw, stampTop, 'Фурнітура', hwCols, hws, 0, hh, hwCell(ctx, assets, [(r) => r.art, (r) => r.title, (r) => r.n]), fh);
   // Якщо зовсім не влізло (дуже великий блок) — продовження на наступному аркуші
   while (mi < mats.length || hi < hws.length) {
     const before = mi + hi;
     ctx = newPage();
-    if (mi < mats.length) mi = table(ctx, M, M, lw, stampTop, 'Матеріали', matCols, mats, mi, mh, textCells(ctx, (r) => [r.pos.join(', '), r.mat, r.name, r.n, fmt(r.t), fmt(r.l), fmt(r.w)], [0, 3]), fm);
+    if (mi < mats.length) mi = table(ctx, M, M, lw, stampTop, 'Матеріали', matCols, mats, mi, mh, textCells(ctx, (r) => [r.pos.join(', '), r.name, r.n, fmt(r.t), fmt(r.l), fmt(r.w), r.edge], [0, 2]), fm);
     if (hi < hws.length) hi = table(ctx, M + lw + 14, M, rw, stampTop, 'Фурнітура', hwCols, hws, hi, hh, hwCell(ctx, assets, [(r) => r.art, (r) => r.title, (r) => r.n]), fh);
     if (mi + hi === before) break;
   }
@@ -850,20 +951,6 @@ function generalPages(panels, names, info, assets) {
     if (!byMat.has(key)) byMat.set(key, { t: p.t, list: [] });
     byMat.get(key).list.push(p);
   }
-  const edge = (p) => {
-    const sd = { L: 0, R: 0, D: 0, U: 0 };
-    const by = new Map((p.b || []).map(([i, , t]) => [i, +t || 0]));
-    for (const sg of p.c || []) {
-      const t = sg.length > 4 ? by.get(sg[4]) : 0;
-      if (!t) continue;
-      const e = 0.6;
-      if (Math.abs(sg[0] - sg[2]) < e) sd[Math.abs(sg[0]) < e ? 'L' : 'R'] = Math.max(sd[Math.abs(sg[0]) < e ? 'L' : 'R'], t);
-      else if (Math.abs(sg[1] - sg[3]) < e) sd[Math.abs(sg[1]) < e ? 'D' : 'U'] = Math.max(sd[Math.abs(sg[1]) < e ? 'D' : 'U'], t);
-    }
-    const v = (x) => (x ? fmt(x) : '—');
-    return sd.L || sd.R || sd.D || sd.U ? `${v(sd.L)} ${v(sd.R)} | ${v(sd.D)} ${v(sd.U)}` : '';
-  };
-  const cutsTxt = (p) => [...new Set((p.cut || []).map((c) => String(c.n || '').trim()).filter(Boolean))].join(', ');
   for (const [mat, g] of [...byMat].sort((a, b) => b[1].t - a[1].t || a[0].localeCompare(b[0], 'uk'))) {
     const m = new Map();
     for (const p of g.list) {
@@ -872,10 +959,10 @@ function generalPages(panels, names, info, assets) {
       m.get(k).n++;
     }
     const rows = [...m.values()].sort((a, b) => (parseFloat(a.p.art) || 1e9) - (parseFloat(b.p.art) || 1e9))
-      .map(({ p, n }) => [p.art || '', `${blockOfPanel(p)}_${p.name}`, fmt(p.t), n, fmt(p.l), fmt(p.w), edge(p), cutsTxt(p)]);
+      .map(({ p, n }) => [p.art || '', `${blockOfPanel(p)}_${p.name}`, fmt(p.t), n, fmt(p.l), fmt(p.w), edgeTxt(p), cutTxt(p)]);
     sections.push({
       title: `Специфікація для ${mat}`,
-      cols: [{ t: 'Поз.', w: 0.05 }, { t: 'Найменування', w: 0.4 }, { t: 'Т', w: 0.05 }, { t: 'К-сть', w: 0.06 }, { t: 'Довжина', w: 0.08 }, { t: 'Ширина', w: 0.08 }, { t: 'Крайка Д1 Д2 | Ш1 Ш2', w: 0.13 }, { t: 'Дод. обробка', w: 0.15 }],
+      cols: [{ t: 'Поз.', w: 0.05 }, { t: 'Найменування', w: 0.4 }, { t: 'Т', w: 0.05 }, { t: 'К-сть', w: 0.06 }, { t: 'Довжина', w: 0.08 }, { t: 'Ширина', w: 0.08 }, { t: 'Крайка', w: 0.13 }, { t: 'Дод. обробка (пази)', w: 0.15 }],
       rows,
     });
   }
@@ -1077,7 +1164,19 @@ export async function makeBlockPdf({ viewer, model, panels, names, onStep, gener
   const codes = [...new Set(names.flatMap((n) => hardwareRows(panels.spec, n).flatMap((r) => r.codes)))];
   const hw = new Map();
   await Promise.all(codes.map(async (c) => { const im = await loadImg(`${import.meta.env.BASE_URL}data/hw/${c}.jpg`); if (im) hw.set(c, im); }));
-  const assets = { hw };
+  // Без фото з Віяра (петлі Blum, ручки тощо) — мініатюра цієї фурнітури з 3D-моделі
+  const norm = (t) => String(t || '').toLowerCase().replace(/[^a-zа-яіїєґ0-9]+/gi, '');
+  const allNames = names.flatMap((n) => [n, ...subBlocksOf(panels, n)]);
+  const missing = [...new Map(allNames.flatMap((n) => hardwareRows(panels.spec, n)).filter((r) => !r.codes.some((c) => hw.has(c))).map((r) => [r.title, r])).values()];
+  const hwParts = model.parts.filter((p) => !p.board && p.key !== 'room' && p.meshes?.length);
+  const thumbList = [];
+  for (const r of missing) {
+    const t = norm(r.title).slice(0, 18);
+    if (t.length < 6) continue;
+    const part = hwParts.find((p) => { const n = norm(p.name?.title); return n.length >= 6 && (n.startsWith(t) || t.startsWith(n.slice(0, 18))); });
+    if (part) thumbList.push({ key: r.title, part });
+  }
+  const assets = { hw, thumbs: renderThumbs(viewer, model, thumbList) };
   // Посилання для QR: ця модель на сайті; для блоку — ще точка його центру (відкриється саме він)
   const slug = new URLSearchParams(location.search).get('model');
   const base = slug ? `${location.origin}${location.pathname}?model=${encodeURIComponent(slug)}` : null;
