@@ -190,6 +190,7 @@ const scene = root.getDefaultScene() || root.listScenes()[0];
 // Параметри виробу з БАЗИСу (скрипт «Експорт для 3D-перегляду» пише m3-viewer.json поруч із моделлю)
 const infoPath = path.join(daeDir, "m3-viewer.json");
 let drillPanels = null;
+let drillExtra = {}; // специфікація фурнітури й шапка для аркушів блоків (лише менеджеру)
 if (fs.existsSync(infoPath)) {
   // UTF-8 (через fs) або cp1251 (запасний запис скрипта через system.writeTextFile)
   const rawInfo = fs.readFileSync(infoPath);
@@ -208,6 +209,8 @@ if (fs.existsSync(infoPath)) {
   scene.setExtras({ ...scene.getExtras(), m3 });
   // Присадка — НЕ в модель (вона публічна), а окремим зашифрованим файлом лише для менеджера
   if (Array.isArray(meta.drill) && meta.drill.length) drillPanels = meta.drill;
+  // У шапку аркуша — лише номер замовлення (префікс) і назва виробу, без імені замовника
+  drillExtra = { spec: Array.isArray(meta.spec) ? meta.spec : [], info: { name: m3.name, prefix: m3.prefix } };
   console.log(`   кріплень з БАЗИСу: ${m3.fasteners.length}`);
   console.log(`   параметри виробу: «${m3.name}» ${m3.prefix}${withOrder ? ", замовлення: " + m3.order : " (замовлення не додано: --with-order)"}`);
 } else {
@@ -232,7 +235,7 @@ if (drillPanels) {
   const key = createHmac('sha256', token).update('m3-drill').digest();
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
-  const body = Buffer.concat([cipher.update(JSON.stringify({ v: 1, panels: drillPanels }), 'utf8'), cipher.final(), cipher.getAuthTag()]);
+  const body = Buffer.concat([cipher.update(JSON.stringify({ v: 1, panels: drillPanels, ...drillExtra }), 'utf8'), cipher.final(), cipher.getAuthTag()]);
   fs.writeFileSync(drillOut, Buffer.concat([iv, body]));
   const holes = drillPanels.reduce((s, p) => s + (p.h ? p.h.length : 0), 0);
   console.log(`Присадка: деталей ${drillPanels.length}, отворів ${holes} → ${path.basename(drillOut)} (зашифровано)`);

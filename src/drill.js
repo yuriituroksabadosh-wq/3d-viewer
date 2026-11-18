@@ -30,7 +30,11 @@ export async function loadDrill(name, tg) {
     const key = await crypto.subtle.importKey('raw', fromB64url(r.key), 'AES-GCM', false, ['decrypt']);
     const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: blob.subarray(0, 12) }, key, blob.subarray(12));
     const data = JSON.parse(new TextDecoder().decode(plain));
-    return Array.isArray(data.panels) ? data.panels : null;
+    if (!Array.isArray(data.panels)) return null;
+    // Специфікація й шапка — властивостями масиву (для аркушів блоків)
+    data.panels.spec = data.spec || [];
+    data.panels.info = data.info || {};
+    return data.panels;
   } catch (err) {
     console.warn('Присадка:', err);
     return null;
