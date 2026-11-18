@@ -909,18 +909,12 @@ export async function loadGltfModel(buffer, title) {
     repaint();
   }
 
-  // Рентген вибраної деталі: сама деталь — прозора синя, кріплення й фурнітура в ній — суцільні й видні крізь усе.
-  // focus: Map(деталь → 'ghost' | 'inner') або null; решта моделі — як є.
+  // Вибрана деталь: вона сама й кріплення в ній — звичайні, уся решта моделі — прозора (рентген).
+  // focus: Set деталей, що лишаються як є, або null.
   let focus = null;
-  const FOCUS_GHOST = new THREE.MeshBasicMaterial({ color: HIGHLIGHT, transparent: true, opacity: 0.3, depthTest: false, depthWrite: false });
-  const onTop = (color) => new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false });
-  const INNER_DOWEL = onTop(0xe0b81f);
-  const INNER_SCREW = onTop(0xd64fb8);
-  const INNER_HW = onTop(0x3b4048);
+  const FOCUS_GHOST = new THREE.MeshBasicMaterial({ color: 0xb8c2cc, transparent: true, opacity: 0.15, depthWrite: false });
   function baseMaterial(rec) {
-    const f = focus && focus.get(rec.part);
-    if (f === 'ghost') return FOCUS_GHOST;
-    if (f === 'inner') return rec.part.xrayMat === XRAY_DOWEL ? INNER_DOWEL : rec.part.xrayMat === XRAY_SCREW ? INNER_SCREW : INNER_HW;
+    if (focus && !focus.has(rec.part)) return FOCUS_GHOST;
     if (mode === "lines") return LINES_FILL;
     if (mode === "xray") {
       if (isBoard(rec.part)) return XRAY_PANEL;
@@ -974,13 +968,13 @@ export async function loadGltfModel(buffer, title) {
     for (const p of selection) applyHighlight(p);
   }
   const highlight = (part) => select(part ? [part] : []);
-  /** Рентген вибраних деталей: list — деталі, null — вимкнути. Кріплення й фурнітура всередині них видно крізь усе. */
+  /** Фокус на вибраних деталях: list — деталі, null — вимкнути. Решта моделі стає прозорою. */
   function setFocus(list) {
     const sel = (list || []).filter((p) => p && p.key !== 'room');
     if (!sel.length && !focus) return;
     focus = null;
     if (sel.length) {
-      focus = new Map(sel.map((p) => [p, 'ghost']));
+      focus = new Set(sel);
       const boxes = sel.map((p) => p.box.clone().expandByScalar(3));
       const big = Math.max(...sel.map((p) => Math.max(p.size.x, p.size.y, p.size.z)));
       for (const p of parts) {
@@ -988,13 +982,8 @@ export async function loadGltfModel(buffer, title) {
         if (Math.max(p.size.x, p.size.y, p.size.z) > big) continue; // не більше за саму деталь
         const d = [p.size.x, p.size.y, p.size.z].sort((a, b) => a - b);
         if (d[1] >= 100) continue; // плита (ХДФ, задня стінка тощо), а не кріплення
-        if (boxes.some((b) => b.intersectsBox(p.box))) focus.set(p, 'inner');
+        if (boxes.some((b) => b.intersectsBox(p.box))) focus.add(p);
       }
-    }
-    // Поверх усього: спершу прозора деталь, над нею кріплення
-    for (const rec of meshes) {
-      const f = focus && focus.get(rec.part);
-      rec.mesh.renderOrder = f === 'inner' ? 999 : f === 'ghost' ? 998 : 0;
     }
     repaint();
   }
