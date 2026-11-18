@@ -48,15 +48,39 @@ function hardwareRows(spec, block) {
 }
 
 // ---------------- Види з 3D-моделі ----------------
-function blockParts(model, name) {
-  const own = model.parts.filter((p) => p.group?.name === name);
+// Блок з БАЗИСу (МН_1) ↔ група 3D-моделі — за деталями (габарит плит), бо в 3D назви блоків бувають без номерів («МН»)
+let mapCache = null;
+function blockGroups(model, panels) {
+  if (mapCache && mapCache.model === model && mapCache.panels === panels) return mapCache;
+  const votes = new Map();
+  for (const p of model.parts) {
+    if (!p.board || !p.group || p.key === 'room') continue;
+    const dp = matchPanel(panels, p.box);
+    const b = dp && blockOfPanel(dp);
+    if (!b) continue;
+    if (!votes.has(b)) votes.set(b, new Map());
+    const v = votes.get(b);
+    v.set(p.group, (v.get(p.group) || 0) + 1);
+  }
+  const byName = new Map(), byGroup = new Map();
+  for (const [b, v] of votes) {
+    const g = [...v].sort((x, y) => y[1] - x[1])[0][0];
+    byName.set(b, g);
+    byGroup.set(g, b);
+  }
+  return (mapCache = { model, panels, byName, byGroup });
+}
+
+function blockParts(model, name, panels) {
+  const map = blockGroups(model, panels);
+  const g = map.byName.get(name);
+  const own = g ? model.parts.filter((p) => p.group === g) : [];
   if (!own.length) return [];
   const box = model.boxOf(own).clone().expandByScalar(2);
-  const blockNames = new Set(model.blocks.map((b) => b.name));
   const ownSet = new Set(own);
   const c = new THREE.Vector3();
   // Кріплення, що в моделі лежать окремою групою (шканти тощо), але всередині габариту блоку
-  const extra = model.parts.filter((p) => !ownSet.has(p) && p.key !== 'room' && !blockNames.has(p.group?.name) && box.containsPoint(p.box.getCenter(c)));
+  const extra = model.parts.filter((p) => !ownSet.has(p) && p.key !== 'room' && !map.byGroup.has(p.group) && box.containsPoint(p.box.getCenter(c)));
   return [...own, ...extra];
 }
 
@@ -99,17 +123,22 @@ function camFor(box, dir, w, h, ortho) {
  * Точки для номерів позицій: рендер у текстуру, де кожна деталь — свій колір (фурнітура — чорна, закриває деталі),
  * далі карта відстаней до межі; для кожної деталі — найглибша видима точка і запас r (півширина місця під номер).
  */
-function idMarks(r, scene, cam, vw, vh, recs, posOf) {
+function idMarks(r, scene, cam, vw, vh, recs, posOf, merge = false) {
   const list = [];
   const swapped = [];
-  const ids = new Map();
+  const ids = new Map(); // деталь → id
+  const byKey = new Map(); // merge: однакова позиція (напр. назва блоку) — одна область
   for (const [m, p] of recs) {
     if (!m.visible) continue;
     let id = 0;
     if (ids.has(p)) id = ids.get(p);
     else {
       const pos = posOf(p);
-      if (pos) { list.push({ p, pos }); id = list.length; }
+      if (pos) {
+        const k = merge ? pos : p;
+        id = byKey.get(k) || 0;
+        if (!id) { list.push({ p, pos }); id = list.length; byKey.set(k, id); }
+      }
       ids.set(p, id);
     }
     const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color().setRGB((id & 255) / 255, ((id >> 8) & 255) / 255, 0), toneMapped: false, side: THREE.DoubleSide });
@@ -167,7 +196,7 @@ function idMarks(r, scene, cam, vw, vh, recs, posOf) {
 
 /** Чотири види блоку: canvas-и + точки позицій деталей на відкритому виді. */
 function renderViews(viewer, model, panels, name, sz) {
-  const parts = blockParts(model, name);
+  const parts = blockParts(model, name, panels);
   if (!parts.length) return null;
   const set = new Set(parts);
   const recs = model.parts.flatMap((p) => p.meshes.map((r) => [r.mesh, p]));
@@ -195,7 +224,9 @@ function renderViews(viewer, model, panels, name, sz) {
     scene.background = new THREE.Color('#ffffff');
     if (floor) floor.visible = false;
     const box = model.boxOf(parts.filter((p) => p.board || p.key === 'facade').length ? parts.filter((p) => p.board || p.key === 'facade') : parts);
-    const bl = model.blocks.find((b) => b.name === name);
+    const g = blockGroups(model, panels).byName.get(name);
+    const gc = box.getCenter(new THREE.Vector3());
+    const bl = model.blocks.filter((b) => b.name === g?.name).sort((a, b2) => a.box.distanceToPoint(gc) - b2.box.distanceToPoint(gc))[0];
     const front = (bl?.facing || new THREE.Vector3(0, 0, 1)).clone().setY(0).normalize();
     const side = new THREE.Vector3(front.z, 0, -front.x); // праворуч від блоку
     const iso = front.clone().multiplyScalar(1).addScaledVector(side, 0.62).add(new THREE.Vector3(0, 0.42, 0)).normalize();
@@ -227,9 +258,29 @@ function renderViews(viewer, model, panels, name, sz) {
 
     model.setViewMode('xray');
     show(() => true);
-    out.front = shot(camFor(box, front, ...sz.front, true), ...sz.front);
-    out.side = shot(camFor(box, side, ...sz.side, true), ...sz.side);
+    const camFront = camFor(box, front, ...sz.front, true), camSide = camFor(box, side, ...sz.side, true);
+    out.front = shot(camFront, ...sz.front);
+    out.side = shot(camSide, ...sz.side);
     out.size = box.getSize(new THREE.Vector3());
+    // Розміри для ортовидів: рівні горизонтальних плит (полиці, дно, кришка) і вертикальних (боковини, стійки)
+    const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), front).normalize();
+    const hAxis = Math.abs(right.x) >= Math.abs(right.z) ? 'x' : 'z';
+    const dAxis = hAxis === 'x' ? 'z' : 'x';
+    const ys = [box.min.y, box.max.y], hs = [box.min[hAxis], box.max[hAxis]];
+    const ds = [box.min[dAxis], box.max[dAxis]];
+    for (const p of parts) {
+      if (!p.board || p.key === 'facade') continue;
+      const sz3 = p.box.getSize(new THREE.Vector3());
+      if (sz3.y <= 40 && Math.max(sz3[hAxis], sz3[dAxis]) > 80) ys.push(p.box.min.y, p.box.max.y);
+      if (sz3[hAxis] <= 40 && sz3.y > 100) hs.push(p.box.min[hAxis], p.box.max[hAxis]);
+    }
+    const uniq = (a) => [...new Set(a.map((v) => Math.round(v * 2) / 2))].sort((p, q) => p - q);
+    const c0 = box.getCenter(new THREE.Vector3());
+    // Точка світу → піксель картинки виду
+    const proj = (cam, w2, h2) => (pt) => { const v = pt.clone().project(cam); return [(v.x + 1) / 2 * w2, (1 - v.y) / 2 * h2]; };
+    const at = (h, yv, axis) => { const p = c0.clone(); p.y = yv; p[axis] = h; return p; };
+    out.frontDims = { proj: proj(camFront, ...sz.front), at: (h, yv) => at(h, yv, hAxis), ys: uniq(ys), hs: uniq(hs) };
+    out.sideDims = { proj: proj(camSide, ...sz.side), at: (h, yv) => at(h, yv, dAxis), ys: [box.min.y, box.max.y], hs: uniq(ds) };
   } finally {
     r.dispose();
     model.setViewMode(savedMode);
@@ -320,29 +371,85 @@ function stamp(ctx, W, H, M, logo, info, block, page, pages) {
     ctx.font = `800 21px ${FONT}`;
     ctx.fillText(fit(ctx, v, lw - 20), lx + 10, ly + 41);
   };
-  label(block === GENERAL ? 'Документ' : 'Блок', block, c1, y, c3 - c1);
+  label(block === GENERAL || block === TITLE ? 'Документ' : 'Блок', block, c1, y, c3 - c1);
   label('Виріб · замовлення', [info.name, (info.prefix || '').trim()].filter(Boolean).join(' · '), c1, y + h / 2, c3 - c1);
   label('Аркуш', `${page} з ${pages}`, c3, y, 210);
   label('Дата', new Date().toLocaleDateString('uk-UA'), c3, y + h / 2, 210);
 }
 
 /**
+ * Розмірні лінії на ортовиді: ліворуч — ланцюжок висот (дно, полиці, кришка) і загальна висота,
+ * знизу — ланцюжок по ширині (боковини, стійки) і загальна ширина. Цифра там, де влазить.
+ */
+function drawDims(ctx, d, ix, iy, s) {
+  const P = (h, yv) => { const [px, py] = d.proj(d.at(h, yv)); return [ix + px * s, iy + py * s]; };
+  const ys = d.ys, hs = d.hs;
+  if (ys.length < 2 || hs.length < 2) return;
+  const a = P(hs[0], ys[0]), b = P(hs[hs.length - 1], ys[0]);
+  const hLeft = a[0] <= b[0] ? hs[0] : hs[hs.length - 1];
+  const xEdge = Math.min(a[0], b[0]), yEdge = Math.max(a[1], b[1]);
+  ctx.save();
+  ctx.strokeStyle = '#2b2b2b';
+  ctx.fillStyle = '#1d1d1f';
+  ctx.lineWidth = 1;
+  const tick = (px, py) => { ctx.beginPath(); ctx.moveTo(px - 4, py + 4); ctx.lineTo(px + 4, py - 4); ctx.stroke(); };
+  const line = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
+  // Вертикальний ланцюжок: pts — екранні y, vals — мм
+  const vChain = (lx, pts, vals, bold) => {
+    line(lx, Math.min(...pts), lx, Math.max(...pts));
+    ctx.font = `${bold ? 800 : 600} ${bold ? 13 : 11}px ${FONT}`;
+    for (let i = 0; i < pts.length; i++) {
+      tick(lx, pts[i]);
+      ctx.save(); ctx.strokeStyle = '#9a948a'; line(xEdge - 2, pts[i], lx - 3, pts[i]); ctx.restore();
+      if (i) {
+        const t = fmt(Math.abs(vals[i] - vals[i - 1])), len = Math.abs(pts[i] - pts[i - 1]);
+        if (len < ctx.measureText(t).width + 4) continue;
+        ctx.save(); ctx.translate(lx - 4, (pts[i] + pts[i - 1]) / 2); ctx.rotate(-Math.PI / 2);
+        ctx.textAlign = 'center'; ctx.fillText(t, 0, 0); ctx.restore();
+      }
+    }
+  };
+  const hChain = (ly, pts, vals, bold) => {
+    line(Math.min(...pts), ly, Math.max(...pts), ly);
+    ctx.font = `${bold ? 800 : 600} ${bold ? 13 : 11}px ${FONT}`;
+    for (let i = 0; i < pts.length; i++) {
+      tick(pts[i], ly);
+      ctx.save(); ctx.strokeStyle = '#9a948a'; line(pts[i], yEdge + 2, pts[i], ly + 3); ctx.restore();
+      if (i) {
+        const t = fmt(Math.abs(vals[i] - vals[i - 1])), len = Math.abs(pts[i] - pts[i - 1]);
+        if (len < ctx.measureText(t).width + 4) continue;
+        ctx.textAlign = 'center'; ctx.fillText(t, (pts[i] + pts[i - 1]) / 2, ly + 14); ctx.textAlign = 'left';
+      }
+    }
+  };
+  const vy = ys.map((v) => P(hLeft, v)[1]);
+  if (ys.length > 2) vChain(xEdge - 18, vy, ys, false);
+  vChain(xEdge - 46, [vy[0], vy[vy.length - 1]], [ys[0], ys[ys.length - 1]], true);
+  const hx = hs.map((v) => P(v, ys[0])[0]);
+  if (hs.length > 2) hChain(yEdge + 14, hx, hs, false);
+  hChain(yEdge + 36, [hx[0], hx[hx.length - 1]], [hs[0], hs[hs.length - 1]], true);
+  ctx.restore();
+}
+
+/**
  * Вид у рамці з підписом. Для виду з позиціями — виноски по всьому периметру рамки:
  * кожна позиція йде до найближчої сторони, однакові позиції — один номер, кілька ліній.
  */
-function viewBox(ctx, img, x, y, w, h, title, marks) {
+function viewBox(ctx, img, x, y, w, h, title, marks, dims) {
   ctx.strokeStyle = '#d9d2c5';
   ctx.lineWidth = 1;
   ctx.strokeRect(x, y, w, h);
   ctx.fillStyle = '#6f685c';
   ctx.font = `700 15px ${FONT}`;
   ctx.fillText(title, x + 8, y + 20);
-  const pad = marks && marks.length ? 46 : 8, top = marks && marks.length ? 46 : 26;
-  const s = Math.min((w - 2 * pad) / img.width, (h - top - pad) / img.height);
+  const hasM = marks && marks.length;
+  const padL = dims ? 66 : hasM ? 46 : 8, padR = hasM ? 46 : 8, padB = dims ? 54 : hasM ? 46 : 8, top = hasM ? 46 : 28;
+  const s = Math.min((w - padL - padR) / img.width, (h - top - padB) / img.height);
   const iw = img.width * s, ih = img.height * s;
-  const ix = x + (w - iw) / 2, iy = y + top + (h - top - pad - ih) / 2;
+  const ix = x + padL + (w - padL - padR - iw) / 2, iy = y + top + (h - top - padB - ih) / 2;
   ctx.drawImage(img, ix, iy, iw, ih);
-  if (!marks || !marks.length) return;
+  if (dims) drawDims(ctx, dims, ix, iy, s);
+  if (!hasM) return;
   // Номер прямо на деталі, якщо місця вистачає; дрібні деталі — виноскою до краю рамки
   const R = 13;
   const onPart = marks.filter((m) => m.r == null || m.r * s >= R * 0.75);
@@ -430,6 +537,106 @@ function viewBox(ctx, img, x, y, w, h, title, marks) {
 
 const STAMP_H = 100;
 const GENERAL = 'Загальна специфікація';
+const TITLE = 'Титульний аркуш';
+
+/** Титульний аркуш: загальний вид усього виробу (без стін) і назва кожного блоку прямо на ньому. */
+function titlePage(viewer, model, names, info, panels) {
+  const [W, H] = [A4[1], A4[0]];
+  const M = 40, stampTop = H - M - STAMP_H - 12;
+  const head = 70;
+  const vw = W - 2 * M, vh = stampTop - M - head - 10;
+  const RW = Math.round(vw * 1.4), RH = Math.round(vh * 1.4);
+  const blockSet = new Set(names);
+  const recs = model.parts.flatMap((p) => p.meshes.map((rr) => [rr.mesh, p]));
+  const savedVis = recs.map(([m]) => m.visible);
+  const scene = viewer.scene;
+  const savedBg = scene.background;
+  const floor = scene.children.find((o) => o.isMesh && o.geometry?.type === 'PlaneGeometry');
+  const savedFloor = floor?.visible;
+  const savedMode = model.viewMode;
+  const ops = model.openerList || [];
+  const savedOps = ops.map((o) => [o.now, o.target]);
+  const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  r.setPixelRatio(1);
+  r.toneMapping = viewer.renderer.toneMapping;
+  r.toneMappingExposure = viewer.renderer.toneMappingExposure;
+  r.outputColorSpace = viewer.renderer.outputColorSpace;
+  let img, marks;
+  try {
+    model.setFocus(null);
+    model.select([]);
+    for (const o of ops) { o.now = 0; o.target = 0; }
+    model.update(0.0001);
+    scene.background = new THREE.Color('#ffffff');
+    if (floor) floor.visible = false;
+    model.setViewMode('real-lines');
+    for (const [m, p] of recs) m.visible = p.key !== 'room';
+    const box = model.boxOf(model.parts.filter((p) => p.key !== 'room'));
+    const dir = new THREE.Vector3(...(model.bounds?.viewDir || [0.6, 0.35, 1])).normalize();
+    const cam = camFor(box, dir, RW, RH, false);
+    r.setSize(RW, RH, false);
+    r.render(scene, cam);
+    img = document.createElement('canvas');
+    img.width = RW; img.height = RH;
+    img.getContext('2d').drawImage(r.domElement, 0, 0);
+    marks = idMarks(r, scene, cam, RW, RH, recs, (p) => { const b = blockGroups(model, panels).byGroup.get(p.group); return b && blockSet.has(b) ? b : null; }, true);
+  } finally {
+    r.dispose();
+    model.setViewMode(savedMode);
+    recs.forEach(([m], i) => { m.visible = savedVis[i]; });
+    scene.background = savedBg;
+    if (floor) floor.visible = savedFloor;
+    ops.forEach((o, i) => { o.now = savedOps[i][0]; o.target = savedOps[i][1]; });
+    model.update(0.0001);
+  }
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(M - 14, M - 14, W - 2 * M + 28, H - 2 * M + 28);
+  ctx.fillStyle = INK;
+  ctx.font = `800 34px ${FONT}`;
+  ctx.fillText([info.name, (info.prefix || '').trim()].filter(Boolean).join(' · ') || 'Виріб', M, M + 36);
+  ctx.fillStyle = '#6f685c';
+  ctx.font = `600 18px ${FONT}`;
+  ctx.fillText(`Блоків: ${names.length}`, M, M + 62);
+  // Обрізати білі поля навколо виробу, щоб він зайняв увесь аркуш
+  const px = img.getContext('2d').getImageData(0, 0, RW, RH).data;
+  let x0 = RW, y0 = RH, x1 = 0, y1 = 0;
+  for (let yy = 0; yy < RH; yy += 2) for (let xx = 0; xx < RW; xx += 2) {
+    const k = (yy * RW + xx) * 4;
+    if (px[k] < 245 || px[k + 1] < 245 || px[k + 2] < 245) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (yy < y0) y0 = yy; if (yy > y1) y1 = yy; }
+  }
+  if (x1 <= x0 || y1 <= y0) { x0 = 0; y0 = 0; x1 = RW; y1 = RH; }
+  const padC = 30;
+  x0 = Math.max(0, x0 - padC); y0 = Math.max(0, y0 - padC); x1 = Math.min(RW, x1 + padC); y1 = Math.min(RH, y1 + padC);
+  const cw = x1 - x0, ch = y1 - y0;
+  const s = Math.min(vw / cw, vh / ch);
+  const ix = M + (vw - cw * s) / 2 - x0 * s, iy = M + head + (vh - ch * s) / 2 - y0 * s;
+  ctx.drawImage(img, x0, y0, cw, ch, ix + x0 * s, iy + y0 * s, cw * s, ch * s);
+  // Назви блоків: табличка в найбільшій видимій частині блоку; якщо налазить на сусідню — зсуваємо нижче
+  const placed = [];
+  ctx.font = `800 20px ${FONT}`;
+  for (const m of marks.sort((a, b) => b.r - a.r)) {
+    const tw = ctx.measureText(m.pos).width, bw = tw + 22, bh = 34;
+    let bx = Math.max(M, Math.min(W - M - bw, ix + m.x * s - bw / 2)), by = iy + m.y * s - bh / 2;
+    for (let k = 0; k < 12 && placed.some((q) => bx < q.x + q.w + 4 && bx + bw + 4 > q.x && by < q.y + q.h + 4 && by + bh + 4 > q.y); k++) by += bh + 6;
+    placed.push({ x: bx, y: by, w: bw, h: bh });
+    ctx.fillStyle = 'rgba(255,255,255,0.94)';
+    ctx.strokeStyle = '#e0592a';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.roundRect(bx, by, bw, bh, 8);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = INK;
+    ctx.fillText(m.pos, bx + 11, by + 24);
+  }
+  return c;
+}
 
 /**
  * Розкладка аркуша блоку: високий блок — книжковий, інакше альбомний. Види — основне (≈65% висоти),
@@ -445,11 +652,19 @@ function layout(size, tableRows) {
   const big = portrait ? 0.34 : 0.4; // частка ширини під вид з позиціями
   const gap = 10;
   const bw = vw * big, sw = (vw - bw - 3 * gap) / 3;
-  const cells = {
+  // Книжковий (високий блок): усі чотири в ряд — вузькі й високі.
+  // Альбомний (широкий): ліворуч великий з позиціями; праворуч угорі загальний і збоку, під ними широкий вид спереду.
+  const rx = M + bw + gap, rw = vw - bw - gap, rh = (vh - gap) / 2, hw = (rw - gap) / 2;
+  const cells = portrait ? {
     open: { x: M, y: M, w: bw, h: vh },
     closed: { x: M + bw + gap, y: M, w: sw, h: vh },
     front: { x: M + bw + gap + (sw + gap), y: M, w: sw, h: vh },
     side: { x: M + bw + gap + 2 * (sw + gap), y: M, w: sw, h: vh },
+  } : {
+    open: { x: M, y: M, w: bw, h: vh },
+    closed: { x: rx, y: M, w: hw, h: rh },
+    side: { x: rx + hw + gap, y: M, w: hw, h: rh },
+    front: { x: rx, y: M + rh + gap, w: rw, h: rh },
   };
   return { portrait, W, H, M, vw, stampTop, cells, tablesY: M + vh + 14 };
 }
@@ -485,8 +700,8 @@ function blockPages(views, block, mats, hws, assets) {
   let ctx = newPage();
   viewBox(ctx, views.open, cells.open.x, cells.open.y, cells.open.w, cells.open.h, 'Без фасадів · позиції', views.marks);
   viewBox(ctx, views.closed, cells.closed.x, cells.closed.y, cells.closed.w, cells.closed.h, 'Загальний вигляд');
-  viewBox(ctx, views.front, cells.front.x, cells.front.y, cells.front.w, cells.front.h, 'Спереду · рентген');
-  viewBox(ctx, views.side, cells.side.x, cells.side.y, cells.side.w, cells.side.h, 'Збоку · рентген');
+  viewBox(ctx, views.front, cells.front.x, cells.front.y, cells.front.w, cells.front.h, 'Спереду · рентген', null, views.frontDims);
+  viewBox(ctx, views.side, cells.side.x, cells.side.y, cells.side.w, cells.side.h, 'Збоку · рентген', null, views.sideDims);
 
   const matCols = [{ t: 'Поз.', w: 0.08 }, { t: 'Матеріал', w: 0.4 }, { t: 'Деталь', w: 0.22 }, { t: 'К-сть', w: 0.07 }, { t: 'Т', w: 0.06 }, { t: 'Довж.', w: 0.085 }, { t: 'Шир.', w: 0.085 }];
   const hwCols = [{ t: '', w: 0.11 }, { t: 'Артикул', w: 0.2 }, { t: 'Найменування', w: 0.58 }, { t: 'К-сть', w: 0.11 }];
@@ -518,8 +733,6 @@ function generalPages(panels, names, info, assets) {
   const M = 40, vw = W - 2 * M, stampTop = H - M - STAMP_H - 12;
   const pages = [];
   const newPage = newPageFn(pages, W, H, M);
-  const ord = String(info.prefix || '').replace(/[^\d/.-]+/g, '').trim();
-  const mark = (art) => (ord ? `${ord}.${art}` : String(art || ''));
   const sections = [];
   sections.push({
     title: 'Складальні одиниці',
@@ -557,10 +770,10 @@ function generalPages(panels, names, info, assets) {
       m.get(k).n++;
     }
     const rows = [...m.values()].sort((a, b) => (parseFloat(a.p.art) || 1e9) - (parseFloat(b.p.art) || 1e9))
-      .map(({ p, n }) => [p.art || '', mark(p.art), `${blockOfPanel(p)}_${p.name}`, fmt(p.t), n, fmt(p.l), fmt(p.w), edge(p), cutsTxt(p)]);
+      .map(({ p, n }) => [p.art || '', `${blockOfPanel(p)}_${p.name}`, fmt(p.t), n, fmt(p.l), fmt(p.w), edge(p), cutsTxt(p)]);
     sections.push({
       title: `Специфікація для ${mat}`,
-      cols: [{ t: 'Поз.', w: 0.05 }, { t: 'Позначення', w: 0.1 }, { t: 'Найменування', w: 0.3 }, { t: 'Т', w: 0.05 }, { t: 'К-сть', w: 0.06 }, { t: 'Довжина', w: 0.08 }, { t: 'Ширина', w: 0.08 }, { t: 'Крайка Д1 Д2 | Ш1 Ш2', w: 0.13 }, { t: 'Дод. обробка', w: 0.15 }],
+      cols: [{ t: 'Поз.', w: 0.05 }, { t: 'Найменування', w: 0.4 }, { t: 'Т', w: 0.05 }, { t: 'К-сть', w: 0.06 }, { t: 'Довжина', w: 0.08 }, { t: 'Ширина', w: 0.08 }, { t: 'Крайка Д1 Д2 | Ш1 Ш2', w: 0.13 }, { t: 'Дод. обробка', w: 0.15 }],
       rows,
     });
   }
@@ -638,7 +851,8 @@ async function pdfFromCanvases(canvases) {
 /** Блоки, для яких можна зробити аркуш: є в моделі й мають плити. */
 export function sheetBlocks(model, panels) {
   const withPanels = new Set(panels.filter((p) => p.t > 0 && p.t <= 60).map(blockOfPanel));
-  return model.blocks.map((b) => b.name).filter((n) => withPanels.has(n));
+  return [...blockGroups(model, panels).byName.keys()].filter((n) => withPanels.has(n))
+    .sort((a, b) => a.localeCompare(b, 'uk', { numeric: true }));
 }
 
 /**
@@ -653,18 +867,21 @@ export async function makeBlockPdf({ viewer, model, panels, names, onStep, gener
   await Promise.all(codes.map(async (c) => { const im = await loadImg(`${import.meta.env.BASE_URL}data/hw/${c}.jpg`); if (im) hw.set(c, im); }));
   const assets = { hw };
   const docs = [];
-  if (general) docs.push({ name: GENERAL, pages: generalPages(panels, names, info, assets) });
+  if (general) {
+    docs.push({ name: TITLE, pages: [titlePage(viewer, model, names, info, panels)] });
+    docs.push({ name: GENERAL, pages: generalPages(panels, names, info, assets) });
+  }
   for (let i = 0; i < names.length; i++) {
     onStep?.(i, names.length);
     await new Promise((r) => setTimeout(r, 30)); // дати кнопці перемалюватись
-    const bp = blockParts(model, names[i]);
+    const bp = blockParts(model, names[i], panels);
     if (!bp.length) continue;
     const mats = materialRows(panels, names[i]);
     const hws = hardwareRows(panels.spec, names[i]);
     const L = layout(model.boxOf(bp).getSize(new THREE.Vector3()), Math.max(mats.length, Math.ceil(hws.length * 1.4)));
     // Рендер у пропорціях комірки з запасом різкості ×1.4 (вид з позиціями — мінус поля під виноски)
     const px = (c, padX, padY) => [Math.round((c.w - padX) * 1.4), Math.round((c.h - padY) * 1.4)];
-    const sz = { open: px(L.cells.open, 92, 92), closed: px(L.cells.closed, 16, 34), front: px(L.cells.front, 16, 34), side: px(L.cells.side, 16, 34) };
+    const sz = { open: px(L.cells.open, 92, 92), closed: px(L.cells.closed, 16, 34), front: px(L.cells.front, 74, 82), side: px(L.cells.side, 74, 82) };
     const views = renderViews(viewer, model, panels, names[i], sz);
     if (!views) continue;
     views.layout = L;
