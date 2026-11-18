@@ -909,10 +909,11 @@ export async function loadGltfModel(buffer, title) {
     repaint();
   }
 
-  let focus = null; // Set деталей, що лишаються суцільними (вибір зі списку), або null
+  let focus = null; // Set деталей, що світяться крізь модель (вибір зі списку), або null
+  const FOCUS_MAT = new THREE.MeshBasicMaterial({ color: HIGHLIGHT, transparent: true, opacity: 0.55, depthTest: false, depthWrite: false });
   function baseMaterial(rec) {
-    // Деталь вибрана зі списку: решта моделі — прозора, як у рентгені
-    if (focus && !focus.has(rec.part)) return XRAY_PANEL;
+    // Деталь вибрана зі списку: вона світиться крізь усю модель, як у рентгені; решта — як є
+    if (focus && focus.has(rec.part)) return FOCUS_MAT;
     if (mode === "lines") return LINES_FILL;
     if (mode === "xray") {
       if (isBoard(rec.part)) return XRAY_PANEL;
@@ -965,11 +966,12 @@ export async function loadGltfModel(buffer, title) {
     for (const p of selection) applyHighlight(p);
   }
   const highlight = (part) => select(part ? [part] : []);
-  /** Рентген навколо деталей: list — що лишається суцільним, null — вимкнути. */
+  /** Рентген для деталей: list — що світиться крізь модель, null — вимкнути. */
   function setFocus(list) {
     const next = list && list.length ? new Set(list) : null;
     if (!next && !focus) return;
     focus = next;
+    for (const rec of meshes) rec.mesh.renderOrder = focus && focus.has(rec.part) ? 999 : 0; // малюємо останньою, поверх усього
     repaint();
   }
 
