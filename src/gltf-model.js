@@ -909,12 +909,17 @@ export async function loadGltfModel(buffer, title) {
     repaint();
   }
 
-  // Вибрана деталь: вона сама й кріплення в ній — звичайні, уся решта моделі — прозора (рентген).
-  // focus: Set деталей, що лишаються як є, або null.
+  // Вибрана деталь: уся модель — рентгеном (плити прозорі з контурами, кріплення й фурнітура суцільні),
+  // сама деталь — прозора помаранчева з помаранчевим контуром. focus: Set вибраних деталей або null.
   let focus = null;
-  const FOCUS_GHOST = new THREE.MeshBasicMaterial({ color: 0xb8c2cc, transparent: true, opacity: 0.15, depthWrite: false });
+  const FOCUS_SEL = new THREE.MeshBasicMaterial({ color: 0xf5a623, transparent: true, opacity: 0.28, depthWrite: false });
+  const EDGE_SEL = new THREE.LineBasicMaterial({ color: 0xf08c00 });
   function baseMaterial(rec) {
-    if (focus && !focus.has(rec.part)) return FOCUS_GHOST;
+    if (focus) {
+      if (focus.has(rec.part)) return FOCUS_SEL;
+      if (isBoard(rec.part)) return XRAY_PANEL;
+      return rec.part.xrayMat || rec.original;
+    }
     if (mode === "lines") return LINES_FILL;
     if (mode === "xray") {
       if (isBoard(rec.part)) return XRAY_PANEL;
@@ -968,24 +973,22 @@ export async function loadGltfModel(buffer, title) {
     for (const p of selection) applyHighlight(p);
   }
   const highlight = (part) => select(part ? [part] : []);
-  /** Фокус на вибраних деталях: list — деталі, null — вимкнути. Решта моделі стає прозорою. */
+  /** Фокус на вибраних деталях: list — деталі, null — вимкнути. Модель стає рентгеном, деталь — помаранчевою. */
   function setFocus(list) {
     const sel = (list || []).filter((p) => p && p.key !== 'room');
     if (!sel.length && !focus) return;
-    focus = null;
-    if (sel.length) {
-      focus = new Set(sel);
-      const boxes = sel.map((p) => p.box.clone().expandByScalar(3));
-      const big = Math.max(...sel.map((p) => Math.max(p.size.x, p.size.y, p.size.z)));
-      for (const p of parts) {
-        if (focus.has(p) || p.key === 'room' || p.board) continue;
-        if (Math.max(p.size.x, p.size.y, p.size.z) > big) continue; // не більше за саму деталь
-        const d = [p.size.x, p.size.y, p.size.z].sort((a, b) => a - b);
-        if (d[1] >= 100) continue; // плита (ХДФ, задня стінка тощо), а не кріплення
-        if (boxes.some((b) => b.intersectsBox(p.box))) focus.add(p);
-      }
-    }
+    focus = sel.length ? new Set(sel) : null;
+    syncEdges();
     repaint();
+  }
+  function syncEdges() {
+    if (focus || mode !== 'real') ensureEdges();
+    for (const rec of meshes) {
+      if (!rec.edges) continue;
+      if (focus) { rec.edges.visible = true; rec.edges.material = focus.has(rec.part) ? EDGE_SEL : EDGE_MAT; continue; }
+      rec.edges.visible = mode !== 'real';
+      rec.edges.material = mode === 'xray' ? EDGE_MAT : EDGE_BLACK;
+    }
   }
 
   // ---- Матеріали моделі: заміна для фасадів, корпусу, стільниці (лише ті матеріали, що є в моделі) ----
@@ -1046,12 +1049,7 @@ export async function loadGltfModel(buffer, title) {
 
   function setViewMode(next) {
     mode = next;
-    if (mode !== "real") ensureEdges();
-    for (const rec of meshes) {
-      if (!rec.edges) continue;
-      rec.edges.visible = mode !== "real";
-      rec.edges.material = mode === "xray" ? EDGE_MAT : EDGE_BLACK;
-    }
+    syncEdges();
     repaint();
     refreshVisibility();
   }
