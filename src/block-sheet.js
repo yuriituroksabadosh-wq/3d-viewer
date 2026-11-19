@@ -243,21 +243,25 @@ function idMarks(r, scene, cam, vw, vh, recs, posOf, merge = false) {
 }
 
 /** Обрізати білі поля навколо зображення (з запасом 14 px); точки позицій зсуваються разом із ним. */
-function cropContent(img, marks) {
+function cropContent(img, marks, rect) {
   const w = img.width, h = img.height;
-  const px = img.getContext('2d').getImageData(0, 0, w, h).data;
-  let x0 = w, y0 = h, x1 = -1, y1 = -1;
-  for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
-    const k = (y * w + x) * 4;
-    if (px[k] < 246 || px[k + 1] < 246 || px[k + 2] < 246) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  let x0, y0, x1, y1;
+  if (rect) [x0, y0, x1, y1] = rect; // та сама рамка, що й для іншої картинки (текстури / рентген)
+  else {
+    const px = img.getContext('2d').getImageData(0, 0, w, h).data;
+    x0 = w; y0 = h; x1 = -1; y1 = -1;
+    for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
+      const k = (y * w + x) * 4;
+      if (px[k] < 246 || px[k + 1] < 246 || px[k + 2] < 246) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    if (x1 < x0 || y1 < y0) return [img, marks, [0, 0, w, h]];
+    const pad = 14;
+    x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad); x1 = Math.min(w, x1 + pad); y1 = Math.min(h, y1 + pad);
   }
-  if (x1 < x0 || y1 < y0) return [img, marks];
-  const pad = 14;
-  x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad); x1 = Math.min(w, x1 + pad); y1 = Math.min(h, y1 + pad);
   const c = document.createElement('canvas');
   c.width = x1 - x0; c.height = y1 - y0;
   c.getContext('2d').drawImage(img, -x0, -y0);
-  return [c, (marks || []).map((m) => ({ ...m, x: m.x - x0, y: m.y - y0 }))];
+  return [c, (marks || []).map((m) => ({ ...m, x: m.x - x0, y: m.y - y0 })), [x0, y0, x1, y1]];
 }
 
 /** Мініатюри фурнітури з 3D-моделі (для тих, у кого немає фото з Віяра): кожна деталь окремо, на білому. */
@@ -431,7 +435,15 @@ function renderViews(viewer, model, panels, name, sz) {
           const dp = matchPanel(panels, p.box);
           return dp && dp.art ? String(dp.art) : null;
         });
-        [out.exploded, out.explodedMarks] = cropContent(out.exploded, out.explodedMarks);
+        // Другий варіант — рентгеном (той самий ракурс, ті самі номери)
+        model.setViewMode('xray');
+        show(() => true); // зміна режиму повертає видимість усій моделі — знову лише цей блок
+        const xr = shot(camEx, ew, eh);
+        model.setViewMode('real-lines');
+        show(() => true);
+        let rect;
+        [out.exploded, out.explodedMarks, rect] = cropContent(out.exploded, out.explodedMarks);
+        [out.explodedXray] = cropContent(xr, [], rect);
       } finally {
         for (const [m, pos] of moved) { m.position.copy(pos); m.updateMatrixWorld(true); }
       }
@@ -1053,13 +1065,15 @@ export function sheetBlocks(model, panels) {
 
 
 // ---------------- Схема складання і деталювання ----------------
-/** Схема складання: розібраний блок на весь аркуш, номери позицій на деталях. */
+/** Схема складання: розібраний блок двічі поруч — у текстурах і рентгеном, номери позицій на обох. */
 function assemblyPage(views) {
   const [W, H] = [A4[1], A4[0]];
-  const M = 40, stampTop = H - M - STAMP_H - 12;
+  const M = 40, stampTop = H - M - STAMP_H - 12, gap = 12;
   const pages = [];
   const ctx = newPageFn(pages, W, H, M)();
-  viewBox(ctx, views.exploded, M, M, W - 2 * M, stampTop - M, 'Схема складання · розібраний блок, номери — позиції деталей', views.explodedMarks);
+  const half = (W - 2 * M - gap) / 2;
+  viewBox(ctx, views.exploded, M, M, half, stampTop - M, 'Схема складання · текстури', views.explodedMarks);
+  if (views.explodedXray) viewBox(ctx, views.explodedXray, M + half + gap, M, half, stampTop - M, 'Схема складання · рентген (видно кріплення)', views.explodedMarks);
   return pages[0];
 }
 
@@ -1207,7 +1221,7 @@ export async function makeBlockPdf({ viewer, model, panels, names, onStep, gener
     const px = (c, padX, padY) => [Math.round((c.w - padX) * 1.4), Math.round((c.h - padY) * 1.4)];
     const sz = {
       open: px(L.cells.open, 92, 92), closed: px(L.cells.closed, 16, 34), front: px(L.cells.front, 74, 82), side: px(L.cells.side, 74, 82),
-      exploded: [Math.round((LW - 80 - 92) * 1.2), Math.round((LH - 40 - STAMP_H - 12 - 40 - 92) * 1.2)],
+      exploded: [Math.round(((LW - 80 - 12) / 2 - 92) * 1.4), Math.round((LH - 40 - STAMP_H - 12 - 40 - 92) * 1.4)],
     };
     const views = renderViews(viewer, model, panels, name, sz);
     if (!views) continue;
