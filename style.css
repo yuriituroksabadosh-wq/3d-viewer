@@ -690,3 +690,15 @@ a.btn { text-decoration: none; box-sizing: border-box; }
   .prod-print h1 { font-size: 16px; } .prod-print h2 { font-size: 14px; margin: 12px 0 4px; break-after: avoid; }
   .prod-print .prod-table { font-size: 10px; } .prod-print tr { break-inside: avoid; }
 }
+
+/* ---- Креслення онлайн ---- */
+.sv { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: #3a3631; }
+.sv-bar { display: flex; gap: 8px; align-items: center; padding: 10px 12px; background: #2b2824; padding-top: max(10px, env(safe-area-inset-top)); }
+.sv-btn { flex: none; border: 0; border-radius: 10px; padding: 10px 14px; font: inherit; font-weight: 700; font-size: 14px; cursor: pointer; background: #4a453e; color: #fff; }
+.sv-pdf { background: #e0592a; }
+.sv-pick { flex: 1; min-width: 0; border: 0; border-radius: 10px; padding: 10px; font: inherit; font-size: 14px; font-weight: 600; background: #fff; color: #222; }
+.sv-status { color: #d9d2c5; font-size: 12px; padding: 6px 14px; }
+.sv-pages { flex: 1; overflow: auto; padding: 4px 10px 24px; display: flex; flex-direction: column; gap: 12px; -webkit-overflow-scrolling: touch; }
+.sv-page { background: #fff; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.35); overflow: auto; flex: none; }
+.sv-page img { display: block; width: 100%; height: auto; cursor: zoom-in; }
+.sv-page.zoom img { width: 260%; max-width: none; cursor: zoom-out; }

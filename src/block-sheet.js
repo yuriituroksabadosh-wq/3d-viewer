@@ -1025,7 +1025,7 @@ function generalPages(panels, names, info, assets) {
 }
 
 // ---------------- PDF з JPEG-сторінок ----------------
-async function pdfFromCanvases(canvases) {
+export async function pdfFromCanvases(canvases) {
   const enc = new TextEncoder();
   const parts = [];
   let len = 0;
@@ -1179,7 +1179,12 @@ async function detailPages(list) {
  * аркуш блоку, схема складання, деталювання; одразу за блоком — так само кожен його під-блок.
  * onStep(i, всього) — для показу прогресу.
  */
-export async function makeBlockPdf({ viewer, model, panels, names, onStep, general = names.length > 1 }) {
+export async function makeBlockPdf(opts) {
+  return pdfFromCanvases(await makeSheets(opts));
+}
+
+/** Аркуші (canvas зі штампами) — для перегляду онлайн або складання в PDF. */
+export async function makeSheets({ viewer, model, panels, names, onStep, general = names.length > 1 }) {
   const info = panels.info || {};
   const logo = await loadImg(logoUrl);
   const codes = [...new Set(names.flatMap((n) => hardwareRows(panels.spec, n).flatMap((r) => r.codes)))];
@@ -1241,5 +1246,5 @@ export async function makeBlockPdf({ viewer, model, panels, names, onStep, gener
     stamp(c.getContext('2d'), c.width, c.height, 40, logo, info, d.name, k, all.length, d.url);
   }
   if (import.meta.env.DEV) window.__sheets = all; // лише для перевірки локально
-  return pdfFromCanvases(all);
+  return all;
 }

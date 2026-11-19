@@ -3,8 +3,8 @@
 
 import { openSheet } from './extras.js';
 import { edgesOf, cutsOf, showDrill } from './drill.js';
-import { makeBlockPdf, sheetBlocks } from './block-sheet.js';
-import { NOTIFY_URL } from './notify.js';
+import { sheetBlocks } from './block-sheet.js';
+import { showSheetsView } from './sheets-view.js';
 
 const fmt = (n) => (Math.round(n * 10) / 10).toString();
 
@@ -95,7 +95,7 @@ export function showProduction(panels, ctx) {
     bar.replaceChildren(
       seg([[false, 'Готовий розмір'], [true, 'Розкрій']], cutMode, (v) => { cutMode = v; render(); }),
       btn('Друк', () => printAll()),
-      ...(ctx ? [btn('Аркуші блоків PDF', (e) => pdf(sheetBlocks(ctx.model, panels), e.currentTarget))] : []),
+      ...(ctx ? [btn('Креслення', () => showSheetsView({ ...ctx, panels, start: 'all' }))] : []),
     );
     body.replaceChildren(...names.flatMap((b) => {
       const ps = blocks.get(b);
@@ -108,7 +108,7 @@ export function showProduction(panels, ctx) {
       head.addEventListener('click', () => { if (open.has(b)) open.delete(b); else open.add(b); render(); });
       if (!open.has(b)) return [head];
       const can = ctx && sheetBlocks(ctx.model, panels).includes(b);
-      return can ? [head, btn('PDF блоку', (e) => pdf([b], e.currentTarget)), table(ps)] : [head, table(ps)];
+      return can ? [head, btn('Креслення блоку', () => showSheetsView({ ...ctx, panels, start: b })), table(ps)] : [head, table(ps)];
     }));
   };
 
@@ -130,40 +130,6 @@ export function showProduction(panels, ctx) {
     window.addEventListener('afterprint', done);
     window.print();
 
-  };
-
-  // PDF аркушів: штамп, 4 види, матеріали, фурнітура
-  let busy = false;
-  const pdf = async (names, b) => {
-    if (busy || !names.length) return;
-    busy = true;
-    const label = b.textContent;
-    try {
-      const blob = await makeBlockPdf({ ...ctx, panels, names, onStep: (i, n) => { b.textContent = `Аркуш ${i + 1} з ${n}…`; } });
-      const fileName = `Аркуші — ${names.length === 1 ? names[0] : [panels.info?.name, (panels.info?.prefix || '').trim()].filter(Boolean).join(' ') || 'виріб'}.pdf`;
-      const tg = window.Telegram?.WebApp;
-      if (tg?.initData) {
-        // У Telegram завантаження з сайту не працює — бот надсилає PDF у чат менеджеру
-        b.textContent = 'Надсилаю в чат…';
-        const head = new TextEncoder().encode(JSON.stringify({ initData: tg.initData, name: fileName }) + '\n');
-        const r = await fetch(`${NOTIFY_URL}/sheetpdf`, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: new Blob([head, blob]) })
-          .then((x) => x.json()).catch(() => null);
-        const msg = r?.ok ? 'PDF надіслано в чат бота.' : 'Не вдалося надіслати PDF у чат.';
-        if (tg.showAlert) tg.showAlert(msg); else alert(msg);
-        return;
-      }
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = fileName;
-      document.body.append(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-    } catch (err) {
-      console.error('Аркуші:', err);
-      const msg = 'Не вдалося зробити PDF: ' + (err.message || err);
-      if (window.Telegram?.WebApp?.showAlert) window.Telegram.WebApp.showAlert(msg); else alert(msg);
-    } finally { busy = false; b.textContent = label; }
   };
 
   const hint = document.createElement('div');
