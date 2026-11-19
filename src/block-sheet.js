@@ -189,11 +189,16 @@ function idMarks(r, scene, cam, vw, vh, recs, posOf, merge = false) {
   }
   const rt = new THREE.WebGLRenderTarget(vw, vh);
   const buf = new Uint8Array(vw * vh * 4);
+  // Отвори присадки (окремі сітки поза деталями) на час проходу ховаємо
+  const holes = scene.getObjectByName('drill-holes');
+  const holesVis = holes?.visible;
+  if (holes) holes.visible = false;
   try {
     r.setRenderTarget(rt);
     r.render(scene, cam);
     r.readRenderTargetPixels(rt, 0, 0, vw, vh, buf);
   } finally {
+    if (holes) holes.visible = holesVis;
     r.setRenderTarget(null);
     rt.dispose();
     for (const [o, mat] of swapped) {
@@ -204,7 +209,9 @@ function idMarks(r, scene, cam, vw, vh, recs, posOf, merge = false) {
   const N = vw * vh, idx = new Int32Array(N);
   for (let y = 0; y < vh; y++) for (let x = 0; x < vw; x++) {
     const s = ((vh - 1 - y) * vw + x) * 4;
-    idx[y * vw + x] = buf[s + 2] > 128 ? -1 : buf[s] + buf[s + 1] * 256;
+    // Наші id мають синій = 0; фон білий; усе інше (отвори присадки, підписи) — як фурнітура (0)
+    const b = buf[s + 2];
+    idx[y * vw + x] = b > 250 && buf[s] > 250 ? -1 : b !== 0 ? 0 : buf[s] + buf[s + 1] * 256;
   }
   // Карта відстаней до межі деталі (фаска 1 / 1.41, два проходи)
   const d = new Float32Array(N);
@@ -231,7 +238,7 @@ function idMarks(r, scene, cam, vw, vh, recs, posOf, merge = false) {
     if (!b || d[i] > b.r) best.set(v, { r: d[i], i });
   }
   const out = [];
-  for (const [v, b] of best) out.push({ pos: list[v - 1].pos, x: b.i % vw, y: Math.floor(b.i / vw), r: b.r });
+  for (const [v, b] of best) if (list[v - 1]) out.push({ pos: list[v - 1].pos, x: b.i % vw, y: Math.floor(b.i / vw), r: b.r });
   return out;
 }
 
