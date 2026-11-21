@@ -322,6 +322,9 @@ function findOpeners(parts) {
   };
   const hinges = parts.filter((p) => p.key !== 'room' && p.key !== 'facade' && hingeRoot(p));
   const handles = by(/ручк/i);
+  // Вбудована посудомийна машина (фасад на ній без петель відкидається донизу)
+  const APPL = /посуд|dishwash|пмм|посудомий/i;
+  const appliances = parts.filter((p) => p.key !== 'room' && p.key !== 'facade' && (APPL.test(p.name.title) || hasAncestor(p.node, (n) => APPL.test(n))));
   // Шухляда: деталі з «ящик» у назві і вся система висування (TANDEMBOX, LEGRABOX…) — крім напрямних, вони в корпусі
   const DRAWER_SYS = /ящик|яшик|шухляд|tandembox|legrabox|merivobox|metabox|antaro|intivo|innotech|arcitech|atira|modern ?box|модерн ?бокс/i;
   const RAIL = /направля|runner|movento|tandem.*направ|quadro/i;
@@ -410,7 +413,11 @@ function findOpeners(parts) {
     const box = near.length ? [] : [...drawerGroups.values()].flatMap((g) =>
       g.box.max.y - g.box.min.y <= s.y + 40 ? (fits(g.box) ? g.parts : []) : g.parts.filter((p) => fits(p.box)))
       .filter((p) => !used.has(p));
-    if (!near.length && !box.length) continue;
+    // Без петель і шухляди, а за фасадом — посудомийна машина: фасад відкидається донизу разом із її дверцятами
+    const app = near.length || box.length ? [] : appliances.filter((p) => !used.has(p)
+      && p.box.max[U] > b.min[U] + 10 && p.box.min[U] < b.max[U] - 10 && p.box.max.y > b.min.y + 20 && p.box.min.y < b.max.y - 20
+      && Math.abs(p.center[T] - f.center[T]) < 700);
+    if (!near.length && !box.length && !app.length) continue;
 
     // Куди «назовні»: бік ручки; інакше — від петель / від ящика
     const avg = (list) => list.reduce((acc, p) => acc + p.center[T], 0) / list.length;
@@ -421,9 +428,26 @@ function findOpeners(parts) {
       const behind = near.filter((h) => !f.box.containsPoint(h.center));
       outSign = -(Math.sign(avg(behind.length ? behind : near) - f.center[T]) || -1);
     }
-    else outSign = -(Math.sign(avg(box) - f.center[T]) || -1);
+    else outSign = -(Math.sign(avg(box.length ? box : app) - f.center[T]) || -1);
     const out = unit(t, outSign);
     const innerT = f.center[T] - outSign * (s[T] / 2); // внутрішня площина фасаду
+
+    if (app.length) {
+      // Посудомийка: вісь — нижній край фасаду, верх іде назовні й донизу
+      const axis = unit(u);
+      const pivot = new THREE.Vector3();
+      pivot[T] = innerT;
+      pivot.y = b.min.y;
+      const free = f.center.clone();
+      free.y = b.max.y;
+      const moved = free.clone().sub(pivot).applyAxisAngle(axis, 0.3).add(pivot).sub(free);
+      const sign = moved.dot(out) >= 0 ? 1 : -1;
+      // Разом із фасадом — тонкі деталі машини, що прилягають до нього (її дверцята)
+      const door = app.filter((p) => Math.min(p.size.x, p.size.y, p.size.z) <= 60 && Math.abs(p.center[T] - f.center[T]) < 80);
+      openers.push({ kind: 'door', axis, pivot, sign, maxAngle: THREE.MathUtils.degToRad(85), dir: out, facade: f, parts: [f, ...hs, ...door] });
+      door.concat(hs).forEach((p) => used.add(p));
+      continue;
+    }
 
     if (near.length) {
       const avgU = near.reduce((acc, h) => acc + h.center[U], 0) / near.length;
@@ -598,6 +622,11 @@ export async function loadGltfModel(buffer, title) {
     p.center = p.box.getCenter(new THREE.Vector3());
     allBox.union(p.box);
     if (p.key !== 'room') furnBox.union(p.box);
+    // Усередині блоку «Фасад…» бувають петлі, планки, службові блоки — фасад лише плита (тонка, ≥100 мм у двох вимірах)
+    if (p.key === 'facade') {
+      const d = [p.size.x, p.size.y, p.size.z].sort((a, b) => a - b);
+      if (d[0] > 40 || d[1] < 100) p.key = 'corpus';
+    }
   }
   const box = furnBox.isEmpty() ? allBox : furnBox;
   // У «Замірах» лежать і стіни, і техніка зі стільницею, розетками, мийкою. Кнопка «Стіни» ховає лише
@@ -997,8 +1026,32 @@ export async function loadGltfModel(buffer, title) {
   for (const part of parts) {
     if (part.key === 'room' || !part.board) { part.slot = null; continue; }
     const names = part.meshes.map((r) => matName(r.original)).join(' ');
-    part.slot = part.key === 'facade' ? 'facade' : /хдф|двп/i.test(names) || /^(зс|задня)/i.test(part.name.title) ? 'back' : /стільниц|столешн/i.test(names) ? 'top' : 'corpus';
+    // Задня стінка — лише ХДФ/ДВП або тонка (до 6 мм) «ЗС»; ДСП-задня 18 мм — це корпус
+    const thin = Math.min(part.size.x, part.size.y, part.size.z) <= 6;
+    part.slot = part.key === 'facade' ? 'facade' : /хдф|двп/i.test(names) || (thin && /^(зс|задня)/i.test(part.name.title)) ? 'back' : /стільниц|столешн/i.test(names) ? 'top' : 'corpus';
   }
+  // Декор фасадів на корпусі (цоколь, торцева боковина в дубі як фасади) — у групу «Фасади»:
+  // матеріал, якого на фасадах більше, ніж на корпусі, вважаємо фасадним
+  {
+    const cnt = new Map();
+    for (const p of parts) {
+      if (p.slot !== 'facade' && p.slot !== 'corpus') continue;
+      for (const n of new Set(p.meshes.map((r) => matName(r.original)))) {
+        if (!cnt.has(n)) cnt.set(n, { facade: 0, corpus: 0 });
+        cnt.get(n)[p.slot]++;
+      }
+    }
+    for (const p of parts) {
+      if (p.slot !== 'corpus') continue;
+      const ns = [...new Set(p.meshes.map((r) => matName(r.original)).filter((n) => !/крайка/i.test(n)))];
+      if (ns.length && ns.every((n) => cnt.get(n) && cnt.get(n).facade > cnt.get(n).corpus)) p.slot = 'facade';
+    }
+  }
+  // Тонка задня стінка (ХДФ) у файлі часто має текстуру ДСП того ж декору — підписуємо її як ХДФ
+  const optKey = (rec) => {
+    const n = matName(rec.original);
+    return rec.part.slot === 'back' && /дсп/i.test(n) && Math.min(rec.part.size.x, rec.part.size.y, rec.part.size.z) <= 6 ? 'ХДФ|' + n : n;
+  };
   for (const rec of meshes) {
     const n = matName(rec.original);
     rec.swappable = /дсп|мдф|хдф|двп|стільниц|столешн|крайка|kronospan|egger|swiss|cleaf|agt|шпон|акрил|пластик hpl/i.test(n) && !/скло|стекло/i.test(n);
@@ -1008,9 +1061,11 @@ export async function loadGltfModel(buffer, title) {
   const seen = new Set();
   for (const rec of meshes) {
     const n = matName(rec.original);
-    if (!rec.swappable || /крайка/i.test(n) || seen.has(n) || rec.part.key === 'room') continue;
-    seen.add(n);
-    options.push({ name: n, short: shortMaterial(n), material: rec.original, swatch: swatchOf(rec.original) });
+    const k = optKey(rec);
+    if (!rec.swappable || /крайка/i.test(n) || seen.has(k) || rec.part.key === 'room') continue;
+    seen.add(k);
+    const short = k === n ? shortMaterial(n) : shortMaterial(n).replace(/^ДСП(\s+лам\.?)?/i, 'ХДФ').replace(/\s*фасадн\S*/i, '');
+    options.push({ name: k, short, material: rec.original, swatch: swatchOf(rec.original) });
   }
   const SLOT_LABELS = { facade: 'Фасади', corpus: 'Корпус', back: 'Задня стінка', top: 'Стільниця' };
   // Для кожної групи — який матеріал стоїть у проєкті (найчастіший серед її плит, без крайок)
@@ -1021,12 +1076,15 @@ export async function loadGltfModel(buffer, title) {
       for (const p of parts) {
         if (p.slot !== id) continue;
         for (const rec of p.meshes) {
-          const i = options.findIndex((o) => o.name === matName(rec.original));
+          const i = options.findIndex((o) => o.name === optKey(rec));
           if (i >= 0) counts.set(i, (counts.get(i) || 0) + 1);
         }
       }
       // У групі буває кілька матеріалів (верхні фасади МДФ, нижні ДСП) — показуємо всі, найчастіший перший
-      const sorted = [...counts.entries()].sort((x, y) => y[1] - x[1]).map(([i]) => i);
+      // Однакова коротка назва (різниться лише хвіст повної назви в БАЗИСі) — один рядок
+      const shown = new Set();
+      const sorted = [...counts.entries()].sort((x, y) => y[1] - x[1]).map(([i]) => i)
+        .filter((i) => { const k = options[i].short.toLowerCase(); if (shown.has(k)) return false; shown.add(k); return true; });
       return { id, label: SLOT_LABELS[id], current: sorted[0] ?? 0, materials: sorted.length ? sorted.slice(0, 4) : [0] };
     });
 
